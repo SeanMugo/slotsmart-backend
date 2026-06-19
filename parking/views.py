@@ -1,3 +1,4 @@
+# parking/views.py
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -25,7 +26,7 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def available(self, request):
         """
-        GET /api/slots/available/?start=2024-01-15T10:00:00&end=2024-01-15T12:00:00
+        GET /api/slots/available/?start=2024-01-20T10:00:00+00:00&end=2024-01-20T12:00:00+00:00
         
         Returns available slots for the given time range
         """
@@ -42,9 +43,16 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             start = timezone.datetime.fromisoformat(start_time)
             end = timezone.datetime.fromisoformat(end_time)
+            
+            # Make timezone-aware
+            if not timezone.is_aware(start):
+                start = timezone.make_aware(start)
+            if not timezone.is_aware(end):
+                end = timezone.make_aware(end)
+                
         except ValueError:
             return Response(
-                {'error': 'Invalid date format. Use: 2024-01-15T10:00:00'},
+                {'error': 'Invalid date format. Use: 2024-01-20T10:00:00+00:00'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -106,16 +114,23 @@ class BookingViewSet(viewsets.ModelViewSet):
         
         if not all([slot_id, start_time, end_time, vehicle_number]):
             return Response(
-                {'error': 'Missing required fields'},
+                {'error': 'Missing required fields: slot_id, start_time, end_time, vehicle_number'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
             start = timezone.datetime.fromisoformat(start_time)
             end = timezone.datetime.fromisoformat(end_time)
+            
+            # ✅ FIX: Make them timezone-aware
+            if not timezone.is_aware(start):
+                start = timezone.make_aware(start)
+            if not timezone.is_aware(end):
+                end = timezone.make_aware(end)
+                
         except ValueError:
             return Response(
-                {'error': 'Invalid date format'},
+                {'error': 'Invalid date format. Use: 2024-01-20T10:00:00+00:00'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -243,8 +258,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         
         # Check for overstay
         if actual_end > booking.end_time:
-            overstay_hours = (actual_end - booking.end_time).total_seconds() / 3600
-            overstay_hours = max(1, int(overstay_hours) + 1)
+            overstay_seconds = (actual_end - booking.end_time).total_seconds()
+            overstay_hours = max(1, int(overstay_seconds / 3600) + 1)
             penalty_rate = float(booking.price_per_hour) * 2
             booking.penalty_amount = round(overstay_hours * penalty_rate, 2)
             booking.status = 'overdue'
