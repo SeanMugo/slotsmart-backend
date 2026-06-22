@@ -62,11 +62,14 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'slotsmart_backend.wsgi.application'
 
-# Database - SQLite (we'll switch to PostgreSQL later)
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'slotsmart_db',
+        'USER': 'postgres',
+        'PASSWORD': 'projectdjango', 
+        'HOST': 'localhost',
+        'PORT': '5432',
     }
 }
 
