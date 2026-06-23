@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     # Our apps
     'accounts',
     'parking',
+     'mpesa_integration', 
 ]
 
 MIDDLEWARE = [
