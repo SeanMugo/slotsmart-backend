@@ -5,4 +5,5 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/', include('parking.urls')), 
+    path('api/mpesa/', include('mpesa_integration.urls')),
 ]
