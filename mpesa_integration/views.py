@@ -16,6 +16,9 @@ from .serializers import MpesaSTKPushSerializer
 class MpesaAuth:
     @staticmethod
     def get_access_token():
+        """
+        Gets M-Pesa access token using consumer key/secret.
+        """
         consumer_key = settings.MPESA_CONSUMER_KEY
         consumer_secret = settings.MPESA_CONSUMER_SECRET
         api_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
@@ -46,20 +49,24 @@ class MpesaSTKPushView(APIView):
             amount = serializer.validated_data['amount']
             user = request.user
 
-            # 2. Get access token
+            # 2. Get access token (hardcoded fallback if needed)
+            # ✅ Step 1: Try to get token normally
             access_token = MpesaAuth.get_access_token()
+            
+            # ✅ Step 2: If that fails, use this hardcoded token (replace with your actual token from shell)
+            if not access_token:
+                print("⚠️ Using hardcoded access token (remove this in production!)")
+                access_token = "Yjd4KF36mxEP1COZGt7yXAU8N4Aw"  
+
             if not access_token:
                 return Response({"error": "Could not authenticate with M-Pesa"}, status=500)
 
-            # 3. Prepare STK Push (EXACTLY matching the simulator)
+            # 3. Prepare STK Push
             api_url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
             timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-
-            # Generate password: Shortcode + Passkey + Timestamp
             password_str = settings.MPESA_SHORTCODE + settings.MPESA_PASSKEY + timestamp
             password = base64.b64encode(password_str.encode()).decode('utf-8')
 
-            # ✅ Payload matching the working simulator
             payload = {
                 "BusinessShortCode": int(settings.MPESA_SHORTCODE),
                 "Password": password,
@@ -69,7 +76,7 @@ class MpesaSTKPushView(APIView):
                 "PartyA": phone,
                 "PartyB": int(settings.MPESA_SHORTCODE),
                 "PhoneNumber": phone,
-                "CallBackURL": "https://your-ngrok-url.ngrok-free.dev/api/mpesa/callback/",
+                "CallBackURL": "https://your-ngrok-url.ngrok-free.dev/api/mpesa/callback/",  # 👈 UPDATE THIS!
                 "AccountReference": user.username[:20],
                 "TransactionDesc": "Parking payment"
             }
@@ -79,30 +86,25 @@ class MpesaSTKPushView(APIView):
                 'Content-Type': 'application/json'
             }
 
-            # 4. Send to M-Pesa
             print("\n=== SENDING PAYLOAD ===")
             print(payload)
             print("========================")
 
             response = requests.post(api_url, json=payload, headers=headers, timeout=30)
 
-            # 5. Log response
             print("\n=== M-PESA RESPONSE ===")
             print(f"Status: {response.status_code}")
             print(f"Body: {response.text}")
             print("========================")
 
-            # 6. Handle response
             if response.status_code == 200:
                 data = response.json()
-
                 if data.get('ResponseCode') != '0':
                     return Response({
                         "error": data.get('ResponseDescription', 'M-Pesa error'),
                         "code": data.get('ResponseCode')
                     }, status=400)
 
-                # Save transaction
                 transaction = MpesaTransaction.objects.create(
                     user=user,
                     phone_number=phone,

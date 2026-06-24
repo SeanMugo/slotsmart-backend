@@ -13,21 +13,22 @@ from datetime import timedelta
 
 from .models import ParkingSlot, Booking, PricingRule
 from .serializers import ParkingSlotSerializer, BookingSerializer, PricingRuleSerializer
+from accounts.permissions import IsDriver, IsGateStaff, IsAdminOrSuperAdmin, IsStaffOrAdmin
 
 
 class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
     View parking slots and check availability
+    ✅ Anyone logged in can view slots
     """
     queryset = ParkingSlot.objects.filter(status='active')
     serializer_class = ParkingSlotSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]  # ✅ Any logged-in user
     
     @action(detail=False, methods=['get'])
     def available(self, request):
         """
-        GET /api/slots/available/?start=2024-01-20T10:00:00+00:00&end=2024-01-20T12:00:00+00:00
-        
+        GET /api/slots/available/?start=...&end=...&type=...
         Returns available slots for the given time range
         """
         start_time = request.query_params.get('start')
@@ -44,7 +45,6 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
             start = timezone.datetime.fromisoformat(start_time)
             end = timezone.datetime.fromisoformat(end_time)
             
-            # Make timezone-aware
             if not timezone.is_aware(start):
                 start = timezone.make_aware(start)
             if not timezone.is_aware(end):
@@ -56,7 +56,6 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Find available slots
         available_slots = ParkingSlot.objects.filter(
             slot_type=slot_type,
             status='active'
@@ -66,7 +65,6 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
             booking__status__in=['reserved', 'active']
         )
         
-        # Calculate dynamic pricing for each slot
         result = []
         for slot in available_slots:
             price = self.calculate_price(slot, start)
@@ -81,31 +79,50 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
         base_price = float(slot.base_rate)
         hour = booking_time.hour
         
-        # Default pricing rules
         if (8 <= hour <= 10) or (17 <= hour <= 19):
-            return round(base_price * 1.5, 2)  # Peak hour: +50%
+            return round(base_price * 1.5, 2)
         elif hour >= 23 or hour <= 6:
-            return round(base_price * 0.7, 2)  # Off-peak: -30%
-        
+            return round(base_price * 0.7, 2)
         return round(base_price, 2)
 
 
 class BookingViewSet(viewsets.ModelViewSet):
     """
     Create and manage bookings
+    ✅ Drivers can create bookings
+    ✅ Gate Staff can check in/out
+    ✅ Admins can view all bookings
     """
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
-    
+
+    def get_permissions(self):
+        """
+        ✅ Role-based permissions per action
+        """
+        if self.action == 'create':
+            return [IsDriver()]  # ✅ Only drivers can create bookings
+        elif self.action in ['check_in', 'check_out']:
+            return [IsGateStaff()]  # ✅ Only gate staff can check in/out
+        elif self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]  # ✅ Anyone can view their own bookings
+        return [IsAuthenticated()]
+
     def get_queryset(self):
-        """Users can only see their own bookings"""
-        return Booking.objects.filter(user=self.request.user)
+        """
+        ✅ Users see only their own bookings
+        ✅ Admins see all bookings
+        """
+        user = self.request.user
+        if user.role in ['admin', 'super_admin']:
+            return Booking.objects.all()  # Admins see all
+        return Booking.objects.filter(user=user)  # Others see their own
     
     @transaction.atomic
     def create(self, request):
         """
         POST /api/bookings/
-        Create a new booking
+        ✅ Only DRIVERS can create bookings
         """
         slot_id = request.data.get('slot_id')
         start_time = request.data.get('start_time')
@@ -122,7 +139,6 @@ class BookingViewSet(viewsets.ModelViewSet):
             start = timezone.datetime.fromisoformat(start_time)
             end = timezone.datetime.fromisoformat(end_time)
             
-            # ✅ FIX: Make them timezone-aware
             if not timezone.is_aware(start):
                 start = timezone.make_aware(start)
             if not timezone.is_aware(end):
@@ -140,7 +156,6 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Get and lock the slot
         try:
             slot = ParkingSlot.objects.select_for_update().get(id=slot_id)
         except ParkingSlot.DoesNotExist:
@@ -149,7 +164,6 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Check for overlapping bookings
         overlap = Booking.objects.filter(
             slot=slot,
             start_time__lt=end,
@@ -163,19 +177,16 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Calculate price
         duration_hours = (end - start).total_seconds() / 3600
         price_per_hour = self.calculate_price(slot, start)
         total_price = round(duration_hours * price_per_hour, 2)
         
-        # Generate QR code
         qr_data = f"SLOTSMART|{slot.id}|{start.isoformat()}|{end.isoformat()}"
         qr = qrcode.make(qr_data)
         buffer = BytesIO()
         qr.save(buffer, format='PNG')
         qr_base64 = base64.b64encode(buffer.getvalue()).decode()
         
-        # Create booking
         booking = Booking.objects.create(
             user=request.user,
             slot=slot,
@@ -192,7 +203,6 @@ class BookingViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     def calculate_price(self, slot, booking_time):
-        """Calculate price based on time"""
         base_price = float(slot.base_rate)
         hour = booking_time.hour
         
@@ -200,14 +210,13 @@ class BookingViewSet(viewsets.ModelViewSet):
             return round(base_price * 1.5, 2)
         elif hour >= 23 or hour <= 6:
             return round(base_price * 0.7, 2)
-        
         return round(base_price, 2)
     
     @action(detail=True, methods=['post'])
     def check_in(self, request, pk=None):
         """
         POST /api/bookings/{id}/check_in/
-        Check in a vehicle
+        ✅ Only GATE STAFF can check in vehicles
         """
         booking = self.get_object()
         
@@ -243,7 +252,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     def check_out(self, request, pk=None):
         """
         POST /api/bookings/{id}/check_out/
-        Check out and calculate final payment
+        ✅ Only GATE STAFF can check out vehicles
         """
         booking = self.get_object()
         
@@ -256,7 +265,6 @@ class BookingViewSet(viewsets.ModelViewSet):
         actual_end = timezone.now()
         booking.checked_out_at = actual_end
         
-        # Check for overstay
         if actual_end > booking.end_time:
             overstay_seconds = (actual_end - booking.end_time).total_seconds()
             overstay_hours = max(1, int(overstay_seconds / 3600) + 1)
@@ -287,7 +295,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     def cancel(self, request, pk=None):
         """
         POST /api/bookings/{id}/cancel/
-        Cancel a booking
+        ✅ Anyone can cancel their own booking
         """
         booking = self.get_object()
         
@@ -304,3 +312,13 @@ class BookingViewSet(viewsets.ModelViewSet):
             'success': True,
             'message': 'Booking cancelled successfully'
         })
+
+
+class AdminSlotViewSet(viewsets.ModelViewSet):
+    """
+    Admin-only slot management
+    ✅ Only ADMINS and SUPERUSERS can manage slots
+    """
+    queryset = ParkingSlot.objects.all()
+    serializer_class = ParkingSlotSerializer
+    permission_classes = [IsAdminOrSuperAdmin]  # ✅ Only admins
