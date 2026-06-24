@@ -1,13 +1,16 @@
 # mpesa_integration/views.py
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+import base64
+import traceback
+from datetime import datetime
+
+import requests
 from django.conf import settings
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from .models import MpesaTransaction
 from .serializers import MpesaSTKPushSerializer
-import requests
-import base64
-from datetime import datetime
 
 
 class MpesaAuth:
@@ -16,21 +19,16 @@ class MpesaAuth:
         consumer_key = settings.MPESA_CONSUMER_KEY
         consumer_secret = settings.MPESA_CONSUMER_SECRET
         api_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-
+        
         try:
             response = requests.get(api_url, auth=(consumer_key, consumer_secret), timeout=30)
-            print("=== ACCESS TOKEN RESPONSE ===")
-            print("Status:", response.status_code)
-            print("Response:", response.text[:200])  # Print first 200 chars
-            print("==============================")
-            
             if response.status_code == 200:
                 return response.json().get('access_token')
             else:
-                print("Failed to get access token:", response.text)
+                print(f"Access token error: {response.status_code} - {response.text}")
                 return None
         except Exception as e:
-            print("Access token error:", str(e))
+            print(f"Access token exception: {e}")
             return None
 
 
@@ -39,34 +37,25 @@ class MpesaSTKPushView(APIView):
 
     def post(self, request):
         try:
-            print("\n=== NEW STK PUSH REQUEST ===")
-            print("User:", request.user.username)
-            print("Data:", request.data)
-
+            # 1. Validate input
             serializer = MpesaSTKPushSerializer(data=request.data)
             if not serializer.is_valid():
-                print("Serializer errors:", serializer.errors)
-                return Response(serializer.errors, status=400)
+                return Response({"error": "Invalid input", "details": serializer.errors}, status=400)
 
             phone = serializer.validated_data['phone_number']
             amount = serializer.validated_data['amount']
             user = request.user
 
-            # 1. Get Access Token
+            # 2. Get access token
             access_token = MpesaAuth.get_access_token()
             if not access_token:
                 return Response({"error": "Could not authenticate with M-Pesa"}, status=500)
 
-            # 2. Prepare STK Push Request
+            # 3. Prepare STK Push
             api_url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
             timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
             password_str = settings.MPESA_SHORTCODE + settings.MPESA_PASSKEY + timestamp
             password = base64.b64encode(password_str.encode()).decode('utf-8')
-
-            headers = {
-                'Authorization': f'Bearer {access_token}',
-                'Content-Type': 'application/json'
-            }
 
             payload = {
                 "BusinessShortCode": settings.MPESA_SHORTCODE,
@@ -77,32 +66,33 @@ class MpesaSTKPushView(APIView):
                 "PartyA": phone,
                 "PartyB": settings.MPESA_SHORTCODE,
                 "PhoneNumber": phone,
-                "CallBackURL": "https://uplifting-armhole-fling.ngrok-free.dev/api/mpesa/callback/",
+                "CallBackURL": "https://your-ngrok-url.ngrok-free.dev/api/mpesa/callback/",
                 "AccountReference": user.username,
                 "TransactionDesc": f"Parking payment for {user.username}"
             }
 
-            print("\n=== STK PUSH PAYLOAD ===")
-            print(payload)
-            print("=========================")
+            # 4. Send to M-Pesa
+            response = requests.post(api_url, json=payload, headers={
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }, timeout=30)
 
-            # 3. Send request to M-Pesa
-            response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+            # 5. Log response (this will show in terminal)
+            print("\n=== M-PESA RESPONSE ===")
+            print(f"Status: {response.status_code}")
+            print(f"Body: {response.text}")
+            print("========================")
 
-            print("\n=== M-PESA STK PUSH RESPONSE ===")
-            print("Status Code:", response.status_code)
-            print("Response Text:", response.text)
-            print("=================================")
-
+            # 6. Handle response
             if response.status_code == 200:
                 data = response.json()
                 
                 # Check if M-Pesa returned an error code
                 if data.get('ResponseCode') != '0':
-                    print("M-Pesa returned error:", data)
                     return Response({
-                        "error": data.get('ResponseDescription', 'M-Pesa error'),
-                        "response_code": data.get('ResponseCode')
+                        "error": "M-Pesa declined the request",
+                        "code": data.get('ResponseCode'),
+                        "message": data.get('ResponseDescription', 'Unknown error')
                     }, status=400)
 
                 # Save transaction
@@ -110,8 +100,8 @@ class MpesaSTKPushView(APIView):
                     user=user,
                     phone_number=phone,
                     amount=amount,
-                    merchant_request_id=data.get('MerchantRequestID'),
-                    checkout_request_id=data.get('CheckoutRequestID'),
+                    merchant_request_id=data.get('MerchantRequestID', ''),
+                    checkout_request_id=data.get('CheckoutRequestID', ''),
                     status='pending',
                     response_code=data.get('ResponseCode'),
                     response_description=data.get('ResponseDescription')
@@ -124,24 +114,31 @@ class MpesaSTKPushView(APIView):
                     "checkout_request_id": data.get('CheckoutRequestID')
                 }, status=200)
             else:
-                print("M-Pesa error response:", response.text)
+                # Non-200 response from M-Pesa
                 return Response({
-                    "error": "M-Pesa payment initiation failed",
-                    "details": response.text
+                    "error": "M-Pesa service error",
+                    "status_code": response.status_code,
+                    "details": response.text[:500]
                 }, status=500)
 
         except requests.exceptions.Timeout:
-            print("Request timed out")
+            print("⏰ M-Pesa request timed out")
             return Response({"error": "M-Pesa request timed out"}, status=504)
-        except requests.exceptions.ConnectionError as e:
-            print("Connection error:", str(e))
-            return Response({"error": "Could not connect to M-Pesa: " + str(e)}, status=503)
+        except requests.exceptions.ConnectionError:
+            print("🔌 Could not connect to M-Pesa")
+            return Response({"error": "Could not connect to M-Pesa"}, status=503)
         except Exception as e:
-            import traceback
-            print("\n=== UNEXPECTED EXCEPTION ===")
-            traceback.print_exc()
-            print("=============================")
-            return Response({"error": str(e)}, status=500)
+            # 👇 THIS captures ANY other error and prints it to terminal
+            print("\n" + "="*50)
+            print("🚨 UNEXPECTED ERROR IN M-PESA VIEW:")
+            traceback.print_exc()  # ← Full error traceback
+            print("="*50 + "\n")
+            
+            # Return a clean error to the user (server stays up)
+            return Response({
+                "error": "Something went wrong processing your payment",
+                "details": str(e) if settings.DEBUG else None
+            }, status=500)
 
 
 class MpesaCallbackView(APIView):
@@ -150,40 +147,30 @@ class MpesaCallbackView(APIView):
     def post(self, request):
         try:
             print("\n=== M-PESA CALLBACK RECEIVED ===")
-            print("Full callback data:", request.data)
-            print("=================================")
-
             data = request.data
+            print(f"Callback data: {data}")
+
             result_code = data.get('Body', {}).get('stkCallback', {}).get('ResultCode')
             checkout_request_id = data.get('Body', {}).get('stkCallback', {}).get('CheckoutRequestID')
             result_desc = data.get('Body', {}).get('stkCallback', {}).get('ResultDesc')
 
-            print(f"Result Code: {result_code}")
-            print(f"Checkout Request ID: {checkout_request_id}")
-            print(f"Result Description: {result_desc}")
-
             if not checkout_request_id:
-                print("Missing checkout_request_id in callback")
-                return Response({"error": "Invalid callback data"}, status=400)
+                print("❌ No checkout_request_id in callback")
+                return Response({"error": "Invalid callback"}, status=400)
 
             transaction = MpesaTransaction.objects.get(checkout_request_id=checkout_request_id)
-            print(f"Found transaction: {transaction.id}")
-
-            if result_code == 0:
-                transaction.status = 'success'
-                print("✅ Transaction marked as SUCCESS")
-            else:
-                transaction.status = 'failed'
-                print("❌ Transaction marked as FAILED")
-
+            transaction.status = 'success' if result_code == 0 else 'failed'
             transaction.save()
-            return Response({"message": "Callback processed successfully"}, status=200)
+
+            print(f"✅ Transaction {transaction.id} updated to {transaction.status}")
+            return Response({"message": "Callback processed"}, status=200)
 
         except MpesaTransaction.DoesNotExist:
-            print(f"Transaction not found for: {checkout_request_id}")
+            print(f"❌ Transaction not found for ID: {checkout_request_id}")
             return Response({"error": "Transaction not found"}, status=404)
         except Exception as e:
-            import traceback
-            print("Callback error:", str(e))
+            print("\n" + "="*50)
+            print("🚨 UNEXPECTED ERROR IN CALLBACK:")
             traceback.print_exc()
-            return Response({"error": str(e)}, status=500)
+            print("="*50 + "\n")
+            return Response({"error": "Callback error"}, status=500)
