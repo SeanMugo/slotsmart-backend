@@ -100,12 +100,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         """
         ✅ Role-based permissions per action
         """
-        if self.action == 'create':
-            return [IsDriver()]  # ✅ Only drivers can create bookings
-        elif self.action in ['check_in', 'check_out']:
-            return [IsGateStaff()]  # ✅ Only gate staff can check in/out
-        elif self.action in ['list', 'retrieve']:
-            return [IsAuthenticated()]  # ✅ Anyone can view their own bookings
+        if self.action in ['check_in', 'check_out']:
+            return [IsStaffOrAdmin()]  # ✅ Only drivers blocked
         return [IsAuthenticated()]
 
     def get_queryset(self):
