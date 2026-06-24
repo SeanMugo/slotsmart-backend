@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ParkingSlotViewSet, BookingViewSet
+from .views import ParkingSlotViewSet, BookingViewSet, AdminSlotViewSet
 
 router = DefaultRouter()
 router.register(r'slots', ParkingSlotViewSet, basename='slot')
