@@ -89,7 +89,7 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
 class BookingViewSet(viewsets.ModelViewSet):
     """
     Create and manage bookings
-    ✅ Drivers can create bookings
+    ✅ Anyone can create bookings (drivers, staff, admin, superuser)
     ✅ Gate Staff can check in/out
     ✅ Admins can view all bookings
     """
@@ -101,8 +101,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         ✅ Role-based permissions per action
         """
         if self.action in ['check_in', 'check_out']:
-            return [IsStaffOrAdmin()]  # ✅ Only drivers blocked
-        return [IsAuthenticated()]
+            return [IsStaffOrAdmin()]  # ✅ Only staff/admin can check in/out
+        return [IsAuthenticated()]  # ✅ Anyone can create/view bookings
 
     def get_queryset(self):
         """
@@ -118,8 +118,10 @@ class BookingViewSet(viewsets.ModelViewSet):
     def create(self, request):
         """
         POST /api/bookings/
-        ✅ Only DRIVERS can create bookings
+        ✅ ANY authenticated user can create bookings
         """
+        # ✅ NO driver check - anyone can book
+        
         slot_id = request.data.get('slot_id')
         start_time = request.data.get('start_time')
         end_time = request.data.get('end_time')
@@ -249,43 +251,92 @@ class BookingViewSet(viewsets.ModelViewSet):
         """
         POST /api/bookings/{id}/check_out/
         ✅ Only GATE STAFF can check out vehicles
+        ✅ Payment happens at checkout with wallet deduction
         """
         booking = self.get_object()
+        user = request.user
         
+        # 1. Check if booking is active
         if booking.status != 'active':
             return Response(
-                {'error': f'Booking is {booking.status}. Only active can be checked out.'},
+                {'error': f'Booking is {booking.status}. Only active bookings can be checked out.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # 2. Calculate actual duration and total
         actual_end = timezone.now()
-        booking.checked_out_at = actual_end
+        duration_hours = (actual_end - booking.start_time).total_seconds() / 3600
         
+        # Calculate price (use current time for peak/off-peak)
+        total_price = self.calculate_price(booking.slot, actual_end) * duration_hours
+        total_price = round(total_price, 2)
+        
+        # 3. Check for overstay
+        penalty_amount = 0.00
         if actual_end > booking.end_time:
             overstay_seconds = (actual_end - booking.end_time).total_seconds()
             overstay_hours = max(1, int(overstay_seconds / 3600) + 1)
             penalty_rate = float(booking.price_per_hour) * 2
-            booking.penalty_amount = round(overstay_hours * penalty_rate, 2)
-            booking.status = 'overdue'
-            message = f'Overstay detected! Penalty: ${booking.penalty_amount}'
-        else:
+            penalty_amount = round(overstay_hours * penalty_rate, 2)
+        
+        final_total = total_price + penalty_amount
+        
+        # 4. Get the driver (who booked)
+        driver = booking.user
+        
+        if driver.role != 'driver':
+            return Response(
+                {'error': 'Booking user is not a driver'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 5. Attempt payment from wallet
+        if driver.wallet_balance >= final_total:
+            # ✅ SUFFICIENT BALANCE - Auto deduct
+            driver.wallet_balance -= final_total
+            driver.save()
+            
             booking.status = 'completed'
-            message = 'Check-out successful'
-        
-        booking.save()
-        
-        total = float(booking.total_price) + float(booking.penalty_amount)
-        
-        return Response({
-            'success': True,
-            'message': message,
-            'data': {
-                'booking_id': booking.id,
-                'base_price': float(booking.total_price),
-                'penalty': float(booking.penalty_amount),
-                'total_paid': round(total, 2)
-            }
-        })
+            booking.checked_out_at = actual_end
+            booking.total_price = total_price
+            booking.penalty_amount = penalty_amount
+            booking.payment_method = 'wallet'
+            booking.is_paid = True
+            booking.save()
+            
+            return Response({
+                'success': True,
+                'message': f'Vehicle {booking.vehicle_number} checked out',
+                'payment': {
+                    'method': 'wallet',
+                    'base_price': float(total_price),
+                    'penalty': float(penalty_amount),
+                    'total_paid': float(final_total),
+                    'remaining_balance': float(driver.wallet_balance)
+                },
+                'booking': {
+                    'id': booking.id,
+                    'status': booking.status,
+                    'checked_out_at': booking.checked_out_at.isoformat()
+                }
+            })
+        else:
+            # ❌ INSUFFICIENT BALANCE - Payment required
+            return Response({
+                'success': False,
+                'error': 'Insufficient wallet balance',
+                'payment_required': {
+                    'base_price': float(total_price),
+                    'penalty': float(penalty_amount),
+                    'total_due': float(final_total),
+                    'wallet_balance': float(driver.wallet_balance or 0.00),
+                    'shortfall': float(final_total - (driver.wallet_balance or 0.00))
+                },
+                'options': [
+                    'Add test money via /api/auth/add-test-money/ (if enabled)',
+                    'Use M-Pesa payment'
+                ]
+            }, status=402)  # 402 Payment Required
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -318,3 +369,13 @@ class AdminSlotViewSet(viewsets.ModelViewSet):
     queryset = ParkingSlot.objects.all()
     serializer_class = ParkingSlotSerializer
     permission_classes = [IsAdminOrSuperAdmin]  # ✅ Only admins
+
+
+class PricingRuleViewSet(viewsets.ModelViewSet):
+    """
+    Manage pricing rules
+    ✅ Only ADMINS and SUPERUSERS can manage pricing
+    """
+    queryset = PricingRule.objects.all()
+    serializer_class = PricingRuleSerializer
+    permission_classes = [IsAdminOrSuperAdmin]

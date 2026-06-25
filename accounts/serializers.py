@@ -7,6 +7,7 @@ from .models import User
 
 class UserSerializer(serializers.ModelSerializer):
     """Convert User objects to JSON and back"""
+    wallet_balance = serializers.SerializerMethodField()
     
     class Meta:
         model = User
@@ -14,7 +15,13 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'first_name', 'last_name',
             'role', 'phone_number', 'wallet_balance', 'created_at'
         ]
-        read_only_fields = ['id', 'wallet_balance', 'created_at']
+        read_only_fields = ['id', 'created_at']
+    
+    def get_wallet_balance(self, obj):
+        """Only return wallet balance for drivers"""
+        if obj.role == 'driver':
+            return str(obj.wallet_balance) if obj.wallet_balance is not None else "0.00"
+        return None  # Hide for non-drivers
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -52,6 +59,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         
         # Create user with hashed password
         user = User.objects.create_user(**validated_data)
+        
+        # Set initial wallet balance for drivers
+        if user.role == 'driver':
+            user.wallet_balance = 0.00
+            user.save()
+        
         return user
 
 
@@ -98,3 +111,45 @@ class ChangePasswordSerializer(serializers.Serializer):
                 "confirm_password": "Passwords don't match"
             })
         return attrs
+
+
+class AddTestMoneySerializer(serializers.Serializer):
+    """Handle adding test money to driver wallet"""
+    
+    amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+        default=1000.00,
+        min_value=0.01
+    )
+    
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be greater than 0")
+        return value
+
+
+class UpdateWalletSerializer(serializers.Serializer):
+    """Handle wallet balance updates (Admin only)"""
+    
+    driver_id = serializers.IntegerField(required=True)
+    amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=True
+    )
+    action = serializers.ChoiceField(
+        choices=['add', 'deduct'],
+        required=True
+    )
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default=""
+    )
+    
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be greater than 0")
+        return value

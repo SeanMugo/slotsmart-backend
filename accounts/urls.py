@@ -1,6 +1,7 @@
 # accounts/urls.py
 from django.urls import path
 from . import views
+from .test_money import AddTestMoneyView
 
 urlpatterns = [
     # Authentication endpoints
@@ -10,4 +11,5 @@ urlpatterns = [
     path('profile/', views.ProfileView.as_view(), name='profile'),
     path('change-password/', views.ChangePasswordView.as_view(), name='change-password'),
     path('test/', views.TestAuthView.as_view(), name='test'),
+    path('auth/add-test-money/', AddTestMoneyView.as_view(), name='add_test_money'),
 ]
