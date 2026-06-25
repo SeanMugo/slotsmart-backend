@@ -136,7 +136,6 @@ class MpesaSTKPushView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-
 class MpesaCallbackView(APIView):
     permission_classes = [AllowAny]
 
@@ -152,9 +151,10 @@ class MpesaCallbackView(APIView):
             result_desc = stk_callback.get('ResultDesc')
 
             if not checkout_request_id:
+                print("❌ No checkout_request_id")
                 return Response({"error": "Invalid callback"}, status=400)
 
-            # Find and update transaction
+            # Find transaction
             transaction = MpesaTransaction.objects.get(checkout_request_id=checkout_request_id)
             transaction.status = 'success' if result_code == 0 else 'failed'
             transaction.response_code = result_code
@@ -163,12 +163,27 @@ class MpesaCallbackView(APIView):
 
             print(f"✅ Transaction {transaction.id} updated to {transaction.status}")
 
+            # ✅ SAFELY update booking if booking_id exists
+            if result_code == 0 and transaction.booking_id:
+                try:
+                    from parking.models import Booking
+                    booking = Booking.objects.get(id=transaction.booking_id)
+                    booking.is_paid = True
+                    booking.payment_method = 'mpesa'
+                    booking.status = 'completed'
+                    booking.save()
+                    print(f"✅ Booking {booking.id} marked as paid")
+                except Booking.DoesNotExist:
+                    print(f"⚠️ Booking {transaction.booking_id} not found")
+                except Exception as e:
+                    print(f"⚠️ Error updating booking: {e}")
+
             return Response({"message": "Callback processed"}, status=200)
 
         except MpesaTransaction.DoesNotExist:
-            print(f"❌ Transaction not found")
+            print(f"❌ Transaction not found for: {checkout_request_id}")
             return Response({"error": "Transaction not found"}, status=404)
         except Exception as e:
             print(f"❌ Callback error: {e}")
             traceback.print_exc()
-            return Response({"error": str(e)}, status=500)       
+            return Response({"error": str(e)}, status=500)
