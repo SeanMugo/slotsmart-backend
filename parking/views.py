@@ -119,8 +119,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         """
         POST /api/bookings/
         ✅ ANY authenticated user can create bookings
+        ✅ Accepts both integer and UUID slot IDs
         """
-        # ✅ NO driver check - anyone can book
         
         slot_id = request.data.get('slot_id')
         start_time = request.data.get('start_time')
@@ -154,9 +154,14 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # ✅ FIX: Handle both integer and UUID slot IDs
         try:
-            slot = ParkingSlot.objects.select_for_update().get(id=slot_id)
-        except ParkingSlot.DoesNotExist:
+            # Try to get slot by ID (supports both int and UUID)
+            if isinstance(slot_id, int) or (isinstance(slot_id, str) and slot_id.isdigit()):
+                slot = ParkingSlot.objects.get(id=int(slot_id))
+            else:
+                slot = ParkingSlot.objects.get(id=slot_id)
+        except (ValueError, TypeError, ParkingSlot.DoesNotExist):
             return Response(
                 {'error': 'Slot not found'},
                 status=status.HTTP_404_NOT_FOUND
@@ -281,62 +286,84 @@ class BookingViewSet(viewsets.ModelViewSet):
         
         final_total = total_price + penalty_amount
         
-        # 4. Get the driver (who booked)
-        driver = booking.user
+        # 4. Get the user who booked
+        booker = booking.user
         
-        if driver.role != 'driver':
-            return Response(
-                {'error': 'Booking user is not a driver'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # 5. Handle different user types
+        if booker.role == 'driver':
+            # ✅ DRIVER BOOKING - Payment required
+            if booker.wallet_balance >= final_total:
+                # ✅ SUFFICIENT BALANCE - Auto deduct
+                booker.wallet_balance -= final_total
+                booker.save()
+                
+                booking.status = 'completed'
+                booking.checked_out_at = actual_end
+                booking.total_price = total_price
+                booking.penalty_amount = penalty_amount
+                booking.payment_method = 'wallet'
+                booking.is_paid = True
+                booking.save()
+                
+                return Response({
+                    'success': True,
+                    'message': f'Vehicle {booking.vehicle_number} checked out',
+                    'payment': {
+                        'method': 'wallet',
+                        'base_price': float(total_price),
+                        'penalty': float(penalty_amount),
+                        'total_paid': float(final_total),
+                        'remaining_balance': float(booker.wallet_balance)
+                    },
+                    'booking': {
+                        'id': booking.id,
+                        'status': booking.status,
+                        'checked_out_at': booking.checked_out_at.isoformat()
+                    }
+                })
+            else:
+                # ❌ INSUFFICIENT BALANCE - Payment required
+                return Response({
+                    'success': False,
+                    'error': 'Insufficient wallet balance',
+                    'payment_required': {
+                        'base_price': float(total_price),
+                        'penalty': float(penalty_amount),
+                        'total_due': float(final_total),
+                        'wallet_balance': float(booker.wallet_balance or 0.00),
+                        'shortfall': float(final_total - (booker.wallet_balance or 0.00))
+                    },
+                    'options': [
+                        'Add test money via /api/auth/add-test-money/ (if enabled)',
+                        'Use M-Pesa payment'
+                    ]
+                }, status=402)  # 402 Payment Required
         
-        # 5. Attempt payment from wallet
-        if driver.wallet_balance >= final_total:
-            # ✅ SUFFICIENT BALANCE - Auto deduct
-            driver.wallet_balance -= final_total
-            driver.save()
-            
+        elif booker.role in ['admin', 'superuser']:
+            # ✅ ADMIN/SUPERUSER BOOKING - No payment (testing mode)
             booking.status = 'completed'
             booking.checked_out_at = actual_end
             booking.total_price = total_price
             booking.penalty_amount = penalty_amount
-            booking.payment_method = 'wallet'
+            booking.payment_method = 'test'
             booking.is_paid = True
             booking.save()
             
             return Response({
                 'success': True,
-                'message': f'Vehicle {booking.vehicle_number} checked out',
-                'payment': {
-                    'method': 'wallet',
-                    'base_price': float(total_price),
-                    'penalty': float(penalty_amount),
-                    'total_paid': float(final_total),
-                    'remaining_balance': float(driver.wallet_balance)
-                },
+                'message': f'Test booking checked out successfully (no payment)',
                 'booking': {
                     'id': booking.id,
                     'status': booking.status,
                     'checked_out_at': booking.checked_out_at.isoformat()
                 }
             })
+        
         else:
-            # ❌ INSUFFICIENT BALANCE - Payment required
+            # ❌ Invalid user role
             return Response({
-                'success': False,
-                'error': 'Insufficient wallet balance',
-                'payment_required': {
-                    'base_price': float(total_price),
-                    'penalty': float(penalty_amount),
-                    'total_due': float(final_total),
-                    'wallet_balance': float(driver.wallet_balance or 0.00),
-                    'shortfall': float(final_total - (driver.wallet_balance or 0.00))
-                },
-                'options': [
-                    'Add test money via /api/auth/add-test-money/ (if enabled)',
-                    'Use M-Pesa payment'
-                ]
-            }, status=402)  # 402 Payment Required
+                'error': f'Invalid user role: {booker.role}. Only drivers, admins, and superusers can book.'
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
