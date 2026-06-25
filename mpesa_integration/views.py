@@ -136,6 +136,7 @@ class MpesaSTKPushView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
+
 class MpesaCallbackView(APIView):
     permission_classes = [AllowAny]
 
@@ -145,49 +146,29 @@ class MpesaCallbackView(APIView):
             data = request.data
             print(f"Callback data: {data}")
 
-            result_code = data.get('Body', {}).get('stkCallback', {}).get('ResultCode')
-            checkout_request_id = data.get('Body', {}).get('stkCallback', {}).get('CheckoutRequestID')
-            result_desc = data.get('Body', {}).get('stkCallback', {}).get('ResultDesc')
+            stk_callback = data.get('Body', {}).get('stkCallback', {})
+            result_code = stk_callback.get('ResultCode')
+            checkout_request_id = stk_callback.get('CheckoutRequestID')
+            result_desc = stk_callback.get('ResultDesc')
 
             if not checkout_request_id:
-                print("❌ No checkout_request_id in callback")
                 return Response({"error": "Invalid callback"}, status=400)
 
-            # Find transaction
+            # Find and update transaction
             transaction = MpesaTransaction.objects.get(checkout_request_id=checkout_request_id)
-
-            # Update transaction
-            if result_code == 0:
-                transaction.status = 'success'
-                print(f"✅ Transaction {transaction.id} successful")
-
-                # Try to update booking if booking_id exists
-                try:
-                    if transaction.booking_id:
-                        from parking.models import Booking
-                        booking = Booking.objects.get(id=transaction.booking_id)
-                        booking.is_paid = True
-                        booking.payment_method = 'mpesa'
-                        booking.status = 'completed'
-                        booking.save()
-                        print(f"✅ Booking {booking.id} marked as paid")
-                except Exception as e:
-                    print(f"⚠️ Could not update booking: {e}")
-
-            else:
-                transaction.status = 'failed'
-                print(f"❌ Payment failed: {result_desc}")
-
+            transaction.status = 'success' if result_code == 0 else 'failed'
             transaction.response_code = result_code
             transaction.response_description = result_desc
             transaction.save()
 
+            print(f"✅ Transaction {transaction.id} updated to {transaction.status}")
+
             return Response({"message": "Callback processed"}, status=200)
 
         except MpesaTransaction.DoesNotExist:
-            print(f"❌ Transaction not found for ID: {checkout_request_id}")
+            print(f"❌ Transaction not found")
             return Response({"error": "Transaction not found"}, status=404)
         except Exception as e:
-            print("Callback error:", str(e))
+            print(f"❌ Callback error: {e}")
             traceback.print_exc()
-            return Response({"error": "Callback error"}, status=500)
+            return Response({"error": str(e)}, status=500)       
