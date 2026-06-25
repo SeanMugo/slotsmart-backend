@@ -106,13 +106,17 @@ class BookingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        ✅ Users see only their own bookings
-        ✅ Admins see all bookings
+        ✅ Drivers see only their own bookings
+        ✅ Staff, Admins, Superusers see all bookings
         """
         user = self.request.user
-        if user.role in ['admin', 'super_admin']:
-            return Booking.objects.all()  # Admins see all
-        return Booking.objects.filter(user=user)  # Others see their own
+        
+        # Staff, Admins, and Superusers can see all bookings
+        if user.role in ['admin', 'super_admin', 'gate_staff']:
+            return Booking.objects.all()
+        
+        # Drivers see only their own bookings
+        return Booking.objects.filter(user=user)
     
     @transaction.atomic
     def create(self, request):
