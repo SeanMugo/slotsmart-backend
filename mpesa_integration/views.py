@@ -76,7 +76,7 @@ class MpesaSTKPushView(APIView):
                 "PartyA": phone,
                 "PartyB": int(settings.MPESA_SHORTCODE),
                 "PhoneNumber": phone,
-                "CallBackURL": "https://uplifting-armhole-fling.ngrok-free.dev/api/mpesa/callback/",
+                "CallBackURL": "https://slotsmart-backend.onrender.com/api/mpesa/callback/",
                 "AccountReference": user.username[:20],
                 "TransactionDesc": "Parking payment"
             }
