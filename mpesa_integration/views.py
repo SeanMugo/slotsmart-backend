@@ -5,7 +5,7 @@ from datetime import datetime
 
 import requests
 from django.conf import settings
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -48,15 +48,10 @@ class MpesaSTKPushView(APIView):
             phone = serializer.validated_data['phone_number']
             amount = serializer.validated_data['amount']
             user = request.user
+            booking_id = request.data.get('booking_id')
 
-            # 2. Get access token (hardcoded fallback if needed)
-            # ✅ Step 1: Try to get token normally
+            # 2. Get access token
             access_token = MpesaAuth.get_access_token()
-            
-            # ✅ Step 2: If that fails, use this hardcoded token (replace with your actual token from shell)
-            if not access_token:
-                print("⚠️ Using hardcoded access token (remove this in production!)")
-                access_token = "Yjd4KF36mxEP1COZGt7yXAU8N4Aw"  
 
             if not access_token:
                 return Response({"error": "Could not authenticate with M-Pesa"}, status=500)
@@ -67,6 +62,10 @@ class MpesaSTKPushView(APIView):
             password_str = settings.MPESA_SHORTCODE + settings.MPESA_PASSKEY + timestamp
             password = base64.b64encode(password_str.encode()).decode('utf-8')
 
+            # Get ngrok URL from environment or use default
+            ngrok_url = getattr(settings, 'NGROK_URL', 'https://slotsmart-backend.onrender.com')
+            callback_url = f"{ngrok_url}/api/mpesa/callback/"
+
             payload = {
                 "BusinessShortCode": int(settings.MPESA_SHORTCODE),
                 "Password": password,
@@ -76,8 +75,8 @@ class MpesaSTKPushView(APIView):
                 "PartyA": phone,
                 "PartyB": int(settings.MPESA_SHORTCODE),
                 "PhoneNumber": phone,
-                "CallBackURL": "https://slotsmart-backend.onrender.com/api/mpesa/callback/",
-                "AccountReference": user.username[:20],
+                "CallBackURL": callback_url,
+                "AccountReference": f"BK{booking_id}" if booking_id else user.username[:20],
                 "TransactionDesc": "Parking payment"
             }
 
@@ -113,7 +112,8 @@ class MpesaSTKPushView(APIView):
                     checkout_request_id=data.get('CheckoutRequestID'),
                     status='pending',
                     response_code=data.get('ResponseCode'),
-                    response_description=data.get('ResponseDescription')
+                    response_description=data.get('ResponseDescription'),
+                    booking_id=booking_id if booking_id else None
                 )
 
                 return Response({
@@ -137,7 +137,7 @@ class MpesaSTKPushView(APIView):
 
 
 class MpesaCallbackView(APIView):
-    permission_classes = []
+    permission_classes = [AllowAny]
 
     def post(self, request):
         try:
@@ -153,11 +153,35 @@ class MpesaCallbackView(APIView):
                 print("❌ No checkout_request_id in callback")
                 return Response({"error": "Invalid callback"}, status=400)
 
+            # Find transaction
             transaction = MpesaTransaction.objects.get(checkout_request_id=checkout_request_id)
-            transaction.status = 'success' if result_code == 0 else 'failed'
+
+            # Update transaction
+            if result_code == 0:
+                transaction.status = 'success'
+                print(f"✅ Transaction {transaction.id} successful")
+
+                # Try to update booking if booking_id exists
+                try:
+                    if transaction.booking_id:
+                        from parking.models import Booking
+                        booking = Booking.objects.get(id=transaction.booking_id)
+                        booking.is_paid = True
+                        booking.payment_method = 'mpesa'
+                        booking.status = 'completed'
+                        booking.save()
+                        print(f"✅ Booking {booking.id} marked as paid")
+                except Exception as e:
+                    print(f"⚠️ Could not update booking: {e}")
+
+            else:
+                transaction.status = 'failed'
+                print(f"❌ Payment failed: {result_desc}")
+
+            transaction.response_code = result_code
+            transaction.response_description = result_desc
             transaction.save()
 
-            print(f"✅ Transaction {transaction.id} updated to {transaction.status}")
             return Response({"message": "Callback processed"}, status=200)
 
         except MpesaTransaction.DoesNotExist:
