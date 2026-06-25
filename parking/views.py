@@ -23,8 +23,8 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
     queryset = ParkingSlot.objects.filter(status='active')
     serializer_class = ParkingSlotSerializer
-    permission_classes = [IsAuthenticated]  # ✅ Any logged-in user
-    
+    permission_classes = [IsAuthenticated]
+
     @action(detail=False, methods=['get'])
     def available(self, request):
         """
@@ -34,28 +34,28 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
         start_time = request.query_params.get('start')
         end_time = request.query_params.get('end')
         slot_type = request.query_params.get('type', 'car')
-        
+
         if not start_time or not end_time:
             return Response(
                 {'error': 'Missing start/end time parameters'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             start = timezone.datetime.fromisoformat(start_time)
             end = timezone.datetime.fromisoformat(end_time)
-            
+
             if not timezone.is_aware(start):
                 start = timezone.make_aware(start)
             if not timezone.is_aware(end):
                 end = timezone.make_aware(end)
-                
+
         except ValueError:
             return Response(
                 {'error': 'Invalid date format. Use: 2024-01-20T10:00:00+00:00'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         available_slots = ParkingSlot.objects.filter(
             slot_type=slot_type,
             status='active'
@@ -64,21 +64,21 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
             booking__end_time__gt=start,
             booking__status__in=['reserved', 'active']
         )
-        
+
         result = []
         for slot in available_slots:
             price = self.calculate_price(slot, start)
             slot_data = ParkingSlotSerializer(slot).data
             slot_data['current_price'] = price
             result.append(slot_data)
-        
+
         return Response(result)
-    
+
     def calculate_price(self, slot, booking_time):
         """Calculate price based on time and rules"""
         base_price = float(slot.base_rate)
         hour = booking_time.hour
-        
+
         if (8 <= hour <= 10) or (17 <= hour <= 19):
             return round(base_price * 1.5, 2)
         elif hour >= 23 or hour <= 6:
@@ -101,8 +101,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         ✅ Role-based permissions per action
         """
         if self.action in ['check_in', 'check_out']:
-            return [IsStaffOrAdmin()]  # ✅ Only staff/admin can check in/out
-        return [IsAuthenticated()]  # ✅ Anyone can create/view bookings
+            return [IsStaffOrAdmin()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         """
@@ -110,14 +110,14 @@ class BookingViewSet(viewsets.ModelViewSet):
         ✅ Staff, Admins, Superusers see all bookings
         """
         user = self.request.user
-        
+
         # Staff, Admins, and Superusers can see all bookings
         if user.role in ['admin', 'super_admin', 'gate_staff']:
             return Booking.objects.all()
-        
+
         # Drivers see only their own bookings
         return Booking.objects.filter(user=user)
-    
+
     @transaction.atomic
     def create(self, request):
         """
@@ -125,42 +125,45 @@ class BookingViewSet(viewsets.ModelViewSet):
         ✅ ANY authenticated user can create bookings
         ✅ Accepts both integer and UUID slot IDs
         """
-        
+        # Ensure driver has wallet balance set
+        if request.user.role == 'driver' and request.user.wallet_balance is None:
+            request.user.wallet_balance = 0.00
+            request.user.save()
+
         slot_id = request.data.get('slot_id')
         start_time = request.data.get('start_time')
         end_time = request.data.get('end_time')
         vehicle_number = request.data.get('vehicle_number')
-        
+
         if not all([slot_id, start_time, end_time, vehicle_number]):
             return Response(
                 {'error': 'Missing required fields: slot_id, start_time, end_time, vehicle_number'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             start = timezone.datetime.fromisoformat(start_time)
             end = timezone.datetime.fromisoformat(end_time)
-            
+
             if not timezone.is_aware(start):
                 start = timezone.make_aware(start)
             if not timezone.is_aware(end):
                 end = timezone.make_aware(end)
-                
+
         except ValueError:
             return Response(
                 {'error': 'Invalid date format. Use: 2024-01-20T10:00:00+00:00'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         if start < timezone.now():
             return Response(
                 {'error': 'Start time must be in the future'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # ✅ FIX: Handle both integer and UUID slot IDs
+
+        # Handle both integer and UUID slot IDs
         try:
-            # Try to get slot by ID (supports both int and UUID)
             if isinstance(slot_id, int) or (isinstance(slot_id, str) and slot_id.isdigit()):
                 slot = ParkingSlot.objects.get(id=int(slot_id))
             else:
@@ -170,30 +173,30 @@ class BookingViewSet(viewsets.ModelViewSet):
                 {'error': 'Slot not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         overlap = Booking.objects.filter(
             slot=slot,
             start_time__lt=end,
             end_time__gt=start,
             status__in=['reserved', 'active']
         ).exists()
-        
+
         if overlap:
             return Response(
                 {'error': 'Slot already booked for this time'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         duration_hours = (end - start).total_seconds() / 3600
         price_per_hour = self.calculate_price(slot, start)
         total_price = round(duration_hours * price_per_hour, 2)
-        
+
         qr_data = f"SLOTSMART|{slot.id}|{start.isoformat()}|{end.isoformat()}"
         qr = qrcode.make(qr_data)
         buffer = BytesIO()
         qr.save(buffer, format='PNG')
         qr_base64 = base64.b64encode(buffer.getvalue()).decode()
-        
+
         booking = Booking.objects.create(
             user=request.user,
             slot=slot,
@@ -205,20 +208,20 @@ class BookingViewSet(viewsets.ModelViewSet):
             qr_code=qr_base64,
             status='reserved'
         )
-        
+
         serializer = self.get_serializer(booking)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-    
+
     def calculate_price(self, slot, booking_time):
         base_price = float(slot.base_rate)
         hour = booking_time.hour
-        
+
         if (8 <= hour <= 10) or (17 <= hour <= 19):
             return round(base_price * 1.5, 2)
         elif hour >= 23 or hour <= 6:
             return round(base_price * 0.7, 2)
         return round(base_price, 2)
-    
+
     @action(detail=True, methods=['post'])
     def check_in(self, request, pk=None):
         """
@@ -226,25 +229,51 @@ class BookingViewSet(viewsets.ModelViewSet):
         ✅ Only GATE STAFF can check in vehicles
         """
         booking = self.get_object()
-        
+        user = request.user
+
+        # Check if user is authorized
+        if user.role not in ['gate_staff', 'admin', 'superuser']:
+            return Response({
+                'error': 'Only gate staff, admin, or superuser can check in bookings'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # Check if booking is already checked in
+        if booking.status == 'active':
+            return Response({
+                'error': 'Booking is already checked in'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if booking is completed
+        if booking.status == 'completed':
+            return Response({
+                'error': 'Booking is already completed'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if booking is overdue
+        if booking.status == 'overdue':
+            return Response({
+                'error': 'Booking has expired and cannot be checked in'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if booking is reserved
         if booking.status != 'reserved':
-            return Response(
-                {'error': f'Booking is {booking.status}. Only reserved can be checked in.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+            return Response({
+                'error': f'Booking is {booking.status}. Only reserved bookings can be checked in.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if booking time has passed
         if timezone.now() > booking.end_time:
             booking.status = 'overdue'
             booking.save()
-            return Response(
-                {'error': 'Booking has expired'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+            return Response({
+                'error': 'Booking has expired. Cannot check in.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check in the booking
         booking.status = 'active'
         booking.checked_in_at = timezone.now()
         booking.save()
-        
+
         return Response({
             'success': True,
             'message': f'Vehicle {booking.vehicle_number} checked in',
@@ -254,7 +283,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                 'valid_until': booking.end_time.isoformat()
             }
         })
-    
+
     @action(detail=True, methods=['post'])
     def check_out(self, request, pk=None):
         """
@@ -264,43 +293,56 @@ class BookingViewSet(viewsets.ModelViewSet):
         """
         booking = self.get_object()
         user = request.user
-        
-        # 1. Check if booking is active
+
+        # Check if user is authorized
+        if user.role not in ['gate_staff', 'admin', 'superuser']:
+            return Response({
+                'error': 'Only gate staff, admin, or superuser can check out bookings'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # Check if booking is active
+        if booking.status == 'overdue':
+            return Response({
+                'error': 'Booking has expired. Please contact staff.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         if booking.status != 'active':
-            return Response(
-                {'error': f'Booking is {booking.status}. Only active bookings can be checked out.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # 2. Calculate actual duration and total
+            return Response({
+                'error': f'Booking is {booking.status}. Only active bookings can be checked out.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Calculate actual duration and total
         actual_end = timezone.now()
         duration_hours = (actual_end - booking.start_time).total_seconds() / 3600
-        
+
         # Calculate price (use current time for peak/off-peak)
         total_price = self.calculate_price(booking.slot, actual_end) * duration_hours
         total_price = round(total_price, 2)
-        
-        # 3. Check for overstay
+
+        # Check for overstay
         penalty_amount = 0.00
         if actual_end > booking.end_time:
             overstay_seconds = (actual_end - booking.end_time).total_seconds()
             overstay_hours = max(1, int(overstay_seconds / 3600) + 1)
             penalty_rate = float(booking.price_per_hour) * 2
             penalty_amount = round(overstay_hours * penalty_rate, 2)
-        
+
         final_total = total_price + penalty_amount
-        
-        # 4. Get the user who booked
+
+        # Get the user who booked
         booker = booking.user
-        
-        # 5. Handle different user types
+
+        # Handle different user types
         if booker.role == 'driver':
-            # ✅ DRIVER BOOKING - Payment required
-            if booker.wallet_balance >= final_total:
-                # ✅ SUFFICIENT BALANCE - Auto deduct
-                booker.wallet_balance -= final_total
+            # DRIVER BOOKING - Payment required
+            # Ensure wallet balance exists (default to 0 if None)
+            wallet_balance = float(booker.wallet_balance or 0.00)
+
+            if wallet_balance >= final_total:
+                # SUFFICIENT BALANCE - Auto deduct
+                booker.wallet_balance = wallet_balance - final_total
                 booker.save()
-                
+
                 booking.status = 'completed'
                 booking.checked_out_at = actual_end
                 booking.total_price = total_price
@@ -308,7 +350,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                 booking.payment_method = 'wallet'
                 booking.is_paid = True
                 booking.save()
-                
+
                 return Response({
                     'success': True,
                     'message': f'Vehicle {booking.vehicle_number} checked out',
@@ -317,7 +359,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                         'base_price': float(total_price),
                         'penalty': float(penalty_amount),
                         'total_paid': float(final_total),
-                        'remaining_balance': float(booker.wallet_balance)
+                        'remaining_balance': float(booker.wallet_balance or 0.00)
                     },
                     'booking': {
                         'id': booking.id,
@@ -326,7 +368,7 @@ class BookingViewSet(viewsets.ModelViewSet):
                     }
                 })
             else:
-                # ❌ INSUFFICIENT BALANCE - Payment required
+                # INSUFFICIENT BALANCE - Payment required
                 return Response({
                     'success': False,
                     'error': 'Insufficient wallet balance',
@@ -334,17 +376,17 @@ class BookingViewSet(viewsets.ModelViewSet):
                         'base_price': float(total_price),
                         'penalty': float(penalty_amount),
                         'total_due': float(final_total),
-                        'wallet_balance': float(booker.wallet_balance or 0.00),
-                        'shortfall': float(final_total - (booker.wallet_balance or 0.00))
+                        'wallet_balance': float(wallet_balance),
+                        'shortfall': float(final_total - wallet_balance)
                     },
                     'options': [
-                        'Add test money via /api/auth/add-test-money/ (if enabled)',
-                        'Use M-Pesa payment'
+                        'Add test money via Django shell: python manage.py shell',
+                        'Then: from accounts.models import User; driver = User.objects.get(username="driver_john"); driver.wallet_balance = 1000.00; driver.save()'
                     ]
-                }, status=402)  # 402 Payment Required
-        
+                }, status=402)
+
         elif booker.role in ['admin', 'superuser']:
-            # ✅ ADMIN/SUPERUSER BOOKING - No payment (testing mode)
+            # ADMIN/SUPERUSER BOOKING - No payment (testing mode)
             booking.status = 'completed'
             booking.checked_out_at = actual_end
             booking.total_price = total_price
@@ -352,7 +394,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             booking.payment_method = 'test'
             booking.is_paid = True
             booking.save()
-            
+
             return Response({
                 'success': True,
                 'message': f'Test booking checked out successfully (no payment)',
@@ -362,13 +404,13 @@ class BookingViewSet(viewsets.ModelViewSet):
                     'checked_out_at': booking.checked_out_at.isoformat()
                 }
             })
-        
+
         else:
-            # ❌ Invalid user role
+            # Invalid user role
             return Response({
                 'error': f'Invalid user role: {booker.role}. Only drivers, admins, and superusers can book.'
             }, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         """
@@ -376,16 +418,16 @@ class BookingViewSet(viewsets.ModelViewSet):
         ✅ Anyone can cancel their own booking
         """
         booking = self.get_object()
-        
+
         if booking.status not in ['reserved', 'active']:
             return Response(
                 {'error': 'Booking cannot be cancelled'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         booking.status = 'cancelled'
         booking.save()
-        
+
         return Response({
             'success': True,
             'message': 'Booking cancelled successfully'
@@ -399,7 +441,7 @@ class AdminSlotViewSet(viewsets.ModelViewSet):
     """
     queryset = ParkingSlot.objects.all()
     serializer_class = ParkingSlotSerializer
-    permission_classes = [IsAdminOrSuperAdmin]  # ✅ Only admins
+    permission_classes = [IsAdminOrSuperAdmin]
 
 
 class PricingRuleViewSet(viewsets.ModelViewSet):
