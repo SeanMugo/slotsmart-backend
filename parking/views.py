@@ -540,10 +540,29 @@ class AdminSlotViewSet(viewsets.ModelViewSet):
     """
     Admin-only slot management
     ✅ Only ADMINS and SUPERUSERS can manage slots
+    ✅ View, Add, Edit, Delete slots
     """
     queryset = ParkingSlot.objects.all()
     serializer_class = ParkingSlotSerializer
     permission_classes = [IsAdminOrSuperAdmin]
+    
+    def perform_create(self, serializer):
+        """Create new slot with admin as creator"""
+        serializer.save(created_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        """Update slot"""
+        serializer.save(updated_by=self.request.user)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Delete slot"""
+        slot = self.get_object()
+        # Check if slot has active bookings
+        if Booking.objects.filter(slot=slot, status__in=['reserved', 'active']).exists():
+            return Response({
+                'error': 'Cannot delete slot with active bookings'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
 
 
 class PricingRuleViewSet(viewsets.ModelViewSet):
