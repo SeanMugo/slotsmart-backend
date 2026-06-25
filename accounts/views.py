@@ -178,3 +178,67 @@ class TestAuthView(APIView):
             'message': f'Welcome {request.user.username}! You are authenticated.',
             'user': UserSerializer(request.user).data
         })
+    
+class TopUpWalletView(APIView):
+    """
+    POST /api/auth/top-up/
+    Top up wallet via M-Pesa
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        user = request.user
+        
+        if user.role != 'driver':
+            return Response({
+                'error': 'Only drivers can top up wallet'
+            }, status=403)
+        
+        amount = request.data.get('amount')
+        phone = request.data.get('phone_number')
+        
+        if not amount or not phone:
+            return Response({
+                'error': 'Amount and phone number required'
+            }, status=400)
+        
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return Response({'error': 'Amount must be greater than 0'}, status=400)
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=400)
+        
+        # Format phone
+        if not phone.startswith('254'):
+            phone = '254' + phone.lstrip('0')
+        
+        # Call M-Pesa
+        from parking.views import BookingViewSet
+        booking_view = BookingViewSet()
+        
+        # We need to attach the request to the view
+        booking_view.request = request
+        
+        mpesa_result = booking_view.call_mpesa_payment(
+            phone_number=phone,
+            amount=amount,
+            booking_id=None,  # Top-up, no booking
+            user=user
+        )
+        
+        if mpesa_result.get('success'):
+            return Response({
+                'success': True,
+                'message': 'M-Pesa STK push sent. Please enter PIN to top up wallet.',
+                'data': {
+                    'checkout_request_id': mpesa_result.get('checkout_request_id'),
+                    'amount': amount,
+                    'status': 'pending'
+                }
+            }, status=200)
+        else:
+            return Response({
+                'success': False,
+                'error': f'M-Pesa failed: {mpesa_result.get("error")}'
+            }, status=400)

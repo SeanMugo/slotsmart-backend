@@ -94,6 +94,7 @@ class BookingViewSet(viewsets.ModelViewSet):
     ✅ Anyone can create bookings (drivers, staff, admin, superuser)
     ✅ Gate Staff can check in/out
     ✅ Admins can view all bookings
+    ✅ Hybrid payment: Wallet (fast) OR M-Pesa (flexible)
     """
     serializer_class = BookingSerializer
     permission_classes = [IsAuthenticated]
@@ -291,21 +292,22 @@ class BookingViewSet(viewsets.ModelViewSet):
         Call your existing M-Pesa initiate endpoint
         """
         try:
-            # Get your ngrok or Render URL from settings
             base_url = getattr(settings, 'BASE_URL', 'https://slotsmart-backend.onrender.com')
             mpesa_url = f"{base_url}/api/mpesa/initiate/"
             
-            # Prepare the request
-            payload = {
-                "phone_number": phone_number,
-                "amount": amount,
-                "booking_id": booking_id
-            }
+            # We need to pass the user's auth token
+            # Get token from request
+            from rest_framework.request import Request
+            if hasattr(self, 'request'):
+                auth_header = self.request.headers.get('Authorization')
+                headers = {'Authorization': auth_header} if auth_header else {}
+            else:
+                headers = {}
             
-            # For testing - if you have the token, use it
-            # If not, the M-Pesa view will handle auth
-            headers = {
-                'Content-Type': 'application/json'
+            payload = {
+                'phone_number': phone_number,
+                'amount': float(amount),
+                'booking_id': booking_id
             }
             
             response = requests.post(mpesa_url, json=payload, headers=headers, timeout=30)
@@ -340,8 +342,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         """
         POST /api/bookings/{id}/check_out/
         ✅ Only GATE STAFF can check out vehicles
-        ✅ Payment happens at checkout with wallet deduction
-        ✅ Falls back to M-Pesa if wallet insufficient
+        ✅ HYBRID PAYMENT: Wallet (fast) OR M-Pesa (flexible)
         """
         booking = self.get_object()
         user = request.user
@@ -386,148 +387,108 @@ class BookingViewSet(viewsets.ModelViewSet):
             final_total = 1.00
 
         # Get the user who booked
-        booker = booking.user
+        driver = booking.user
 
         # Handle different user types
-        if booker.role == 'driver':
-            # DRIVER BOOKING - Payment required
-            wallet_balance = float(booker.wallet_balance or 0.00)
+        if driver.role == 'driver':
+            # DRIVER BOOKING - Hybrid payment
+            wallet_balance = float(driver.wallet_balance or 0.00)
 
-            # Check if wallet has sufficient balance
-            if wallet_balance == 0:
-                # Try M-Pesa if phone number exists
-                if booker.phone_number:
-                    # Format phone number
-                    phone = booker.phone_number
-                    if not phone.startswith('254'):
-                        phone = '254' + phone.lstrip('0')
-                    
-                    # Call your existing M-Pesa initiate endpoint
-                    mpesa_result = self.call_mpesa_payment(
-                        phone_number=phone,
-                        amount=final_total,
-                        booking_id=booking.id,
-                        user=booker
-                    )
-                    
-                    if mpesa_result.get('success'):
-                        return Response({
-                            'success': False,
-                            'payment_required': True,
-                            'payment_method': 'mpesa',
-                            'message': 'M-Pesa STK push sent to your phone. Please enter PIN.',
-                            'data': {
-                                'checkout_request_id': mpesa_result.get('checkout_request_id'),
-                                'transaction_id': mpesa_result.get('transaction_id'),
-                                'amount': float(final_total),
-                                'status': 'pending'
-                            }
-                        }, status=202)  # Accepted for processing
-                    else:
-                        return Response({
-                            'success': False,
-                            'error': f'Wallet balance is $0.00 and M-Pesa failed: {mpesa_result.get("error", "Unknown error")}',
-                            'payment_required': {
-                                'amount_due': float(final_total),
-                                'wallet_balance': 0.00,
-                                'shortfall': float(final_total)
-                            },
-                            'action_required': 'Please add funds to your wallet or check your phone number.'
-                        }, status=402)
-                else:
+            # 🚀 OPTION 1: FAST TRACK - Sufficient wallet balance (Like ETC)
+            if wallet_balance >= final_total:
+                # Instant checkout - deduct from wallet
+                driver.wallet_balance = wallet_balance - final_total
+                driver.save()
+
+                booking.status = 'completed'
+                booking.checked_out_at = actual_end
+                booking.total_price = total_price
+                booking.penalty_amount = penalty_amount
+                booking.payment_method = 'wallet'
+                booking.is_paid = True
+                booking.save()
+
+                return Response({
+                    'success': True,
+                    'message': f'Vehicle {booking.vehicle_number} checked out',
+                    'payment': {
+                        'method': 'wallet',
+                        'type': 'fast_track',
+                        'base_price': float(total_price),
+                        'penalty': float(penalty_amount),
+                        'total_paid': float(final_total),
+                        'remaining_balance': float(driver.wallet_balance)
+                    },
+                    'booking': {
+                        'id': booking.id,
+                        'status': booking.status,
+                        'checked_out_at': booking.checked_out_at.isoformat()
+                    }
+                })
+
+            # 📱 OPTION 2: FLEXIBLE PAYMENT - Insufficient balance → M-Pesa
+            else:
+                # Check if driver has phone number for M-Pesa
+                if not driver.phone_number:
                     return Response({
                         'success': False,
-                        'error': 'Payment required. Wallet balance is $0.00 and no phone number found for M-Pesa.',
-                        'payment_required': {
-                            'amount_due': float(final_total),
-                            'wallet_balance': 0.00,
-                            'shortfall': float(final_total)
-                        },
-                        'action_required': 'Please add funds to your wallet or update your phone number.'
-                    }, status=402)
-
-            if wallet_balance < final_total:
-                # Try M-Pesa for the shortfall
-                if booker.phone_number:
-                    phone = booker.phone_number
-                    if not phone.startswith('254'):
-                        phone = '254' + phone.lstrip('0')
-                    
-                    mpesa_result = self.call_mpesa_payment(
-                        phone_number=phone,
-                        amount=final_total,
-                        booking_id=booking.id,
-                        user=booker
-                    )
-                    
-                    if mpesa_result.get('success'):
-                        return Response({
-                            'success': False,
-                            'payment_required': True,
-                            'payment_method': 'mpesa',
-                            'message': 'Insufficient wallet balance. M-Pesa STK push sent to your phone.',
-                            'data': {
-                                'checkout_request_id': mpesa_result.get('checkout_request_id'),
-                                'transaction_id': mpesa_result.get('transaction_id'),
-                                'amount': float(final_total),
-                                'status': 'pending',
-                                'wallet_balance': float(wallet_balance)
-                            }
-                        }, status=202)
-                    else:
-                        return Response({
-                            'success': False,
-                            'error': f'Insufficient wallet balance and M-Pesa failed: {mpesa_result.get("error", "Unknown error")}',
-                            'payment_required': {
-                                'amount_due': float(final_total),
-                                'wallet_balance': float(wallet_balance),
-                                'shortfall': float(final_total - wallet_balance)
-                            },
-                            'action_required': f'Please add ${float(final_total - wallet_balance):.2f} to your wallet.'
-                        }, status=402)
-                else:
-                    return Response({
-                        'success': False,
-                        'error': 'Insufficient wallet balance and no phone number found for M-Pesa.',
+                        'error': 'Insufficient wallet balance and no phone number for M-Pesa',
                         'payment_required': {
                             'amount_due': float(final_total),
                             'wallet_balance': float(wallet_balance),
                             'shortfall': float(final_total - wallet_balance)
                         },
-                        'action_required': f'Please add ${float(final_total - wallet_balance):.2f} to your wallet or update your phone number.'
+                        'payment_options': [
+                            'Add funds to wallet via top-up',
+                            'Update phone number for M-Pesa'
+                        ]
                     }, status=402)
 
-            # SUFFICIENT BALANCE - Auto deduct from wallet
-            booker.wallet_balance = wallet_balance - final_total
-            booker.save()
+                # Format phone number
+                phone = driver.phone_number
+                if not phone.startswith('254'):
+                    phone = '254' + phone.lstrip('0')
 
-            booking.status = 'completed'
-            booking.checked_out_at = actual_end
-            booking.total_price = total_price
-            booking.penalty_amount = penalty_amount
-            booking.payment_method = 'wallet'
-            booking.is_paid = True
-            booking.save()
+                # Call M-Pesa
+                mpesa_result = self.call_mpesa_payment(
+                    phone_number=phone,
+                    amount=final_total,
+                    booking_id=booking.id,
+                    user=driver
+                )
 
-            return Response({
-                'success': True,
-                'message': f'Vehicle {booking.vehicle_number} checked out',
-                'payment': {
-                    'method': 'wallet',
-                    'base_price': float(total_price),
-                    'penalty': float(penalty_amount),
-                    'total_paid': float(final_total),
-                    'remaining_balance': float(booker.wallet_balance or 0.00)
-                },
-                'booking': {
-                    'id': booking.id,
-                    'status': booking.status,
-                    'checked_out_at': booking.checked_out_at.isoformat()
-                }
-            })
+                if mpesa_result.get('success'):
+                    return Response({
+                        'success': False,
+                        'payment_required': True,
+                        'payment_method': 'mpesa',
+                        'type': 'flexible_payment',
+                        'message': 'Insufficient wallet balance. M-Pesa STK push sent to your phone.',
+                        'data': {
+                            'checkout_request_id': mpesa_result.get('checkout_request_id'),
+                            'transaction_id': mpesa_result.get('transaction_id'),
+                            'amount': float(final_total),
+                            'status': 'pending',
+                            'wallet_balance': float(wallet_balance)
+                        }
+                    }, status=202)  # Accepted for processing
+                else:
+                    return Response({
+                        'success': False,
+                        'error': f'Insufficient wallet balance and M-Pesa failed: {mpesa_result.get("error", "Unknown error")}',
+                        'payment_required': {
+                            'amount_due': float(final_total),
+                            'wallet_balance': float(wallet_balance),
+                            'shortfall': float(final_total - wallet_balance)
+                        },
+                        'payment_options': [
+                            'Add funds to wallet via top-up',
+                            'Try M-Pesa again'
+                        ]
+                    }, status=402)
 
-        elif booker.role in ['admin', 'superuser']:
-            # ADMIN/SUPERUSER BOOKING - No payment (testing mode)
+        # ADMIN/SUPERUSER BOOKING - No payment (testing mode)
+        elif driver.role in ['admin', 'superuser']:
             booking.status = 'completed'
             booking.checked_out_at = actual_end
             booking.total_price = total_price
@@ -538,7 +499,7 @@ class BookingViewSet(viewsets.ModelViewSet):
 
             return Response({
                 'success': True,
-                'message': f'Test booking checked out successfully (no payment)',
+                'message': 'Test booking checked out successfully (no payment)',
                 'booking': {
                     'id': booking.id,
                     'status': booking.status,
@@ -549,7 +510,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         else:
             # Invalid user role
             return Response({
-                'error': f'Invalid user role: {booker.role}. Only drivers, admins, and superusers can book.'
+                'error': f'Invalid user role: {driver.role}. Only drivers, admins, and superusers can book.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
