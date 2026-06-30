@@ -414,3 +414,38 @@ class AdminUserActivateView(APIView):
             return Response({
                 'error': 'User not found'
             }, status=status.HTTP_404_NOT_FOUND)
+        
+class AdminUserDeleteView(APIView):
+    """
+    POST /api/admin/users/{id}/delete/
+    Delete user (Admin only)
+    """
+    permission_classes = [IsAdminOrSuperAdmin]
+    
+    def post(self, request, pk):
+        try:
+            user = User.objects.get(id=pk)
+            
+            # Don't delete superusers
+            if user.is_superuser:
+                return Response({
+                    'error': 'Cannot delete a superuser'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Don't delete yourself
+            if user.id == request.user.id:
+                return Response({
+                    'error': 'You cannot delete yourself'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            username = user.username
+            user.delete()
+            
+            return Response({
+                'success': True,
+                'message': f'User {username} deleted successfully'
+            })
+        except User.DoesNotExist:
+            return Response({
+                'error': 'User not found'
+            }, status=status.HTTP_404_NOT_FOUND)

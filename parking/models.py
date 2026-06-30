@@ -31,7 +31,7 @@ class ParkingSlot(models.Model):
     # Features
     has_charger = models.BooleanField(default=False)
     
-    # Status: 'active' or 'maintenance'
+    # Status
     status = models.CharField(max_length=20, default='active')
     
     # Pricing
@@ -45,6 +45,7 @@ class ParkingSlot(models.Model):
         return f"{self.slot_number} (Floor {self.floor}, {self.zone})"
     
     class Meta:
+        db_table = 'parking_slots'  # Optional
         indexes = [
             models.Index(fields=['floor', 'status']),
             models.Index(fields=['zone', 'slot_type']),
@@ -55,11 +56,11 @@ class Booking(models.Model):
     """A parking reservation"""
     
     STATUS_CHOICES = [
-        ('reserved', 'Reserved - Not Checked In'),
-        ('active', 'Active - Vehicle Inside'),
-        ('completed', 'Completed - Paid & Left'),
+        ('reserved', 'Reserved'),
+        ('active', 'Active'),
+        ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
-        ('overdue', 'Overdue - Penalty Applied'),
+        ('overdue', 'Overdue'),
     ]
     
     # Relationships
@@ -96,8 +97,7 @@ class Booking(models.Model):
         return f"Booking #{self.id} - {self.slot.slot_number} ({self.status})"
     
     class Meta:
-        # CRITICAL: Prevents double-booking at database level!
-        # This works with PostgreSQL. For SQLite, we handle in views.
+        db_table = 'bookings'
         indexes = [
             models.Index(fields=['user', 'status']),
             models.Index(fields=['start_time']),
@@ -123,7 +123,4 @@ class PricingRule(models.Model):
         return f"{zone_str} - Day {self.day_of_week}: {self.start_hour}-{self.end_hour} (x{self.multiplier})"
     
     class Meta:
-        indexes = [
-            models.Index(fields=['day_of_week', 'is_active']),
-            models.Index(fields=['zone']),
-        ]
+        db_table = 'pricing_rules'

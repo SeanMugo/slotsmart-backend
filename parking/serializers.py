@@ -3,19 +3,21 @@ from .models import ParkingSlot, Booking, PricingRule
 
 
 class ParkingSlotSerializer(serializers.ModelSerializer):
-    """Convert ParkingSlot to JSON"""
     is_available = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
     
     class Meta:
         model = ParkingSlot
         fields = '__all__'
     
     def get_is_available(self, obj):
-        return obj.status == 'active'
+        return obj.status == 'available'
+    
+    def get_status_display(self, obj):
+        return dict(ParkingSlot.STATUS_CHOICES).get(obj.status, obj.status)
 
 
 class BookingSerializer(serializers.ModelSerializer):
-    """Convert Booking to JSON"""
     user_details = serializers.SerializerMethodField()
     slot_details = serializers.SerializerMethodField()
     
@@ -41,7 +43,6 @@ class BookingSerializer(serializers.ModelSerializer):
 
 
 class PricingRuleSerializer(serializers.ModelSerializer):
-    """Convert PricingRule to JSON"""
     class Meta:
         model = PricingRule
         fields = '__all__'
