@@ -3,7 +3,7 @@ from .views import (
     RegisterView, LoginView, ProfileView, ChangePasswordView,
     LogoutView, TestAuthView, TopUpWalletView,
     AdminUserListView, AdminUserDetailView,
-    AdminUserDeactivateView, AdminUserActivateView
+    AdminUserDeactivateView, AdminUserActivateView, AdminUserDeleteView
 )
 
 urlpatterns = [
@@ -23,4 +23,5 @@ urlpatterns = [
     path('admin/users/<int:pk>/', AdminUserDetailView.as_view(), name='admin-user-detail'),
     path('admin/users/<int:pk>/deactivate/', AdminUserDeactivateView.as_view(), name='admin-user-deactivate'),
     path('admin/users/<int:pk>/activate/', AdminUserActivateView.as_view(), name='admin-user-activate'),
+    path('admin/users/<int:pk>/delete/', AdminUserDeleteView.as_view(), name='admin-user-delete'),
 ]
