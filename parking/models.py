@@ -22,6 +22,13 @@ class ParkingSlot(models.Model):
         ('C', 'Zone C - Economy'),
     ]
     
+    STATUS_CHOICES = [
+        ('available', 'Available'),
+        ('reserved', 'Reserved'),
+        ('occupied', 'Occupied'),
+        ('maintenance', 'Maintenance'),
+    ]
+    
     # Basic info
     slot_number = models.CharField(max_length=10, unique=True)
     floor = models.IntegerField()
@@ -31,8 +38,12 @@ class ParkingSlot(models.Model):
     # Features
     has_charger = models.BooleanField(default=False)
     
-    # Status
-    status = models.CharField(max_length=20, default='active')
+    # Status — FIXED with choices and default
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='available'
+    )
     
     # Pricing
     base_rate = models.DecimalField(max_digits=6, decimal_places=2)
@@ -45,7 +56,7 @@ class ParkingSlot(models.Model):
         return f"{self.slot_number} (Floor {self.floor}, {self.zone})"
     
     class Meta:
-        db_table = 'parking_slots'  # Optional
+        db_table = 'parking_slots'
         indexes = [
             models.Index(fields=['floor', 'status']),
             models.Index(fields=['zone', 'slot_type']),
@@ -75,7 +86,11 @@ class Booking(models.Model):
     end_time = models.DateTimeField()
     
     # Status
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='reserved')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='reserved'
+    )
     
     # Pricing
     price_per_hour = models.DecimalField(max_digits=6, decimal_places=2)
