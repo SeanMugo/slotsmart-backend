@@ -20,27 +20,32 @@ from accounts.permissions import IsDriver, IsGateStaff, IsAdminOrSuperAdmin, IsS
 
 class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    View parking slots and check availability
-    ✅ Anyone logged in can view slots
+    View parking slots and check availability.
+    Any authenticated user can view available slots.
     """
-    queryset = ParkingSlot.objects.filter(status='active')
+
     serializer_class = ParkingSlotSerializer
     permission_classes = [IsAuthenticated]
 
-    @action(detail=False, methods=['get'])
+    def get_queryset(self):
+        return ParkingSlot.objects.filter(status="available")
+
+    @action(detail=False, methods=["get"])
     def available(self, request):
         """
         GET /api/slots/available/?start=...&end=...&type=...
-        Returns available slots for the given time range
+
+        Returns available slots for the requested time period.
         """
-        start_time = request.query_params.get('start')
-        end_time = request.query_params.get('end')
-        slot_type = request.query_params.get('type', 'car')
+
+        start_time = request.query_params.get("start")
+        end_time = request.query_params.get("end")
+        slot_type = request.query_params.get("type", "car")
 
         if not start_time or not end_time:
             return Response(
-                {'error': 'Missing start/end time parameters'},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Missing start/end time parameters"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
@@ -49,44 +54,48 @@ class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
 
             if not timezone.is_aware(start):
                 start = timezone.make_aware(start)
+
             if not timezone.is_aware(end):
                 end = timezone.make_aware(end)
 
         except ValueError:
             return Response(
-                {'error': 'Invalid date format. Use: 2024-01-20T10:00:00+00:00'},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "error": "Invalid date format. Use: 2026-01-20T10:00:00+00:00"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        available_slots = ParkingSlot.objects.filter(
-            slot_type=slot_type,
-            status='active'
+        available_slots = self.get_queryset().filter(
+            slot_type=slot_type
         ).exclude(
             booking__start_time__lt=end,
             booking__end_time__gt=start,
-            booking__status__in=['reserved', 'active']
+            booking__status__in=["reserved", "active"],
         )
 
         result = []
+
         for slot in available_slots:
-            price = self.calculate_price(slot, start)
             slot_data = ParkingSlotSerializer(slot).data
-            slot_data['current_price'] = price
+            slot_data["current_price"] = self.calculate_price(slot, start)
             result.append(slot_data)
 
         return Response(result)
 
     def calculate_price(self, slot, booking_time):
-        """Calculate price based on time and rules"""
+        """Calculate price using peak/off-peak rules."""
+
         base_price = float(slot.base_rate)
         hour = booking_time.hour
 
-        if (8 <= hour <= 10) or (17 <= hour <= 19):
+        if 8 <= hour <= 10 or 17 <= hour <= 19:
             return round(base_price * 1.5, 2)
-        elif hour >= 23 or hour <= 6:
-            return round(base_price * 0.7, 2)
-        return round(base_price, 2)
 
+        if hour >= 23 or hour <= 6:
+            return round(base_price * 0.7, 2)
+
+        return round(base_price, 2)
 
 class BookingViewSet(viewsets.ModelViewSet):
     """

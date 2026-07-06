@@ -68,7 +68,7 @@ class Booking(models.Model):
     
     STATUS_CHOICES = [
         ('reserved', 'Reserved'),
-        ('active', 'Active'),
+        ('available', 'Available'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
         ('overdue', 'Overdue'),
@@ -139,3 +139,5 @@ class PricingRule(models.Model):
     
     class Meta:
         db_table = 'pricing_rules'
+
+        
