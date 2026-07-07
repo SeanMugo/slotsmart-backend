@@ -1,143 +1,156 @@
 from django.db import models
 from django.contrib.auth import get_user_model
-from django.contrib.postgres.constraints import ExclusionConstraint
-from django.contrib.postgres.fields import DateTimeRangeField
-from django.contrib.postgres.indexes import GistIndex
 
 User = get_user_model()
 
 
 class ParkingSlot(models.Model):
-    """A physical parking spot"""
-    
+    """A physical parking space."""
+
     SLOT_TYPES = [
-        ('car', 'Car'),
-        ('bike', 'Bike'),
-        ('ev', 'EV Charging'),
+        ("car", "Car"),
+        ("motorbike", "Motorbike"),
+        ("ev", "Electric Vehicle"),
     ]
-    
+
     ZONES = [
-        ('A', 'Zone A - Premium'),
-        ('B', 'Zone B - Standard'),
-        ('C', 'Zone C - Economy'),
+        ("A", "Zone A - Premium"),
+        ("B", "Zone B - Standard"),
+        ("C", "Zone C - Economy"),
     ]
-    
+
     STATUS_CHOICES = [
-        ('available', 'Available'),
-        ('reserved', 'Reserved'),
-        ('occupied', 'Occupied'),
-        ('maintenance', 'Maintenance'),
+        ("available", "Available"),
+        ("occupied", "Occupied"),
+        ("maintenance", "Maintenance"),
     ]
-    
-    # Basic info
+
     slot_number = models.CharField(max_length=10, unique=True)
-    floor = models.IntegerField()
-    zone = models.CharField(max_length=2, choices=ZONES)
-    slot_type = models.CharField(max_length=10, choices=SLOT_TYPES)
-    
-    # Features
+    floor = models.PositiveIntegerField()
+    zone = models.CharField(max_length=1, choices=ZONES)
+    slot_type = models.CharField(max_length=20, choices=SLOT_TYPES)
+
     has_charger = models.BooleanField(default=False)
-    
-    # Status — FIXED with choices and default
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
-        default='available'
+        default="available",
     )
-    
-    # Pricing
-    base_rate = models.DecimalField(max_digits=6, decimal_places=2)
-    
-    # Timestamps
+
+    # Hourly parking charge
+    base_rate = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        return f"{self.slot_number} (Floor {self.floor}, {self.zone})"
-    
+
     class Meta:
-        db_table = 'parking_slots'
-        indexes = [
-            models.Index(fields=['floor', 'status']),
-            models.Index(fields=['zone', 'slot_type']),
-        ]
+        db_table = "parking_slots"
+        ordering = ["floor", "slot_number"]
+
+    def __str__(self):
+        return self.slot_number
 
 
-class Booking(models.Model):
-    """A parking reservation"""
-    
+class ParkingSession(models.Model):
+    """Represents one parking visit."""
+
     STATUS_CHOICES = [
-        ('reserved', 'Reserved'),
-        ('available', 'Available'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled'),
-        ('overdue', 'Overdue'),
+        ("active", "Active"),
+        ("completed", "Completed"),
     ]
-    
-    # Relationships
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    slot = models.ForeignKey(ParkingSlot, on_delete=models.PROTECT)
-    
-    # Vehicle info
-    vehicle_number = models.CharField(max_length=20)
-    
-    # Time
-    start_time = models.DateTimeField()
-    end_time = models.DateTimeField()
-    
-    # Status
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="parking_sessions",
+    )
+
+    slot = models.ForeignKey(
+        ParkingSlot,
+        on_delete=models.PROTECT,
+        related_name="sessions",
+    )
+
+    license_plate = models.CharField(max_length=20)
+
+    check_in_time = models.DateTimeField(auto_now_add=True)
+
+    check_out_time = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
-        default='reserved'
+        default="active",
     )
-    
-    # Pricing
-    price_per_hour = models.DecimalField(max_digits=6, decimal_places=2)
-    total_price = models.DecimalField(max_digits=8, decimal_places=2)
-    penalty_amount = models.DecimalField(max_digits=6, decimal_places=2, default=0)
-    
-    # QR Code
-    qr_code = models.TextField(blank=True, null=True)
-    
-    # Check-in/out
-    checked_in_at = models.DateTimeField(null=True, blank=True)
-    checked_out_at = models.DateTimeField(null=True, blank=True)
-    
-    # Timestamps
+
+    hourly_rate = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+    )
+
+    duration_hours = models.PositiveIntegerField(
+        default=0,
+    )
+
+    amount_due = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
+
     updated_at = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        return f"Booking #{self.id} - {self.slot.slot_number} ({self.status})"
-    
+
     class Meta:
-        db_table = 'bookings'
-        indexes = [
-            models.Index(fields=['user', 'status']),
-            models.Index(fields=['start_time']),
-            models.Index(fields=['slot', 'start_time', 'end_time']),
-        ]
+        db_table = "parking_sessions"
+        ordering = ["-check_in_time"]
+
+    def save(self, *args, **kwargs):
+        self.license_plate = self.license_plate.upper().strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.license_plate} - {self.slot.slot_number}"
 
 
 class PricingRule(models.Model):
-    """Dynamic pricing rules"""
-    
-    zone = models.CharField(max_length=2, null=True, blank=True)
-    day_of_week = models.IntegerField()  # 0=Monday
-    start_hour = models.TimeField()
-    end_hour = models.TimeField()
-    multiplier = models.DecimalField(max_digits=3, decimal_places=1)
-    is_active = models.BooleanField(default=True)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        zone_str = self.zone or "All Zones"
-        return f"{zone_str} - Day {self.day_of_week}: {self.start_hour}-{self.end_hour} (x{self.multiplier})"
-    
-    class Meta:
-        db_table = 'pricing_rules'
+    """
+    Future feature.
+    Not used in Version 1.
+    """
 
-        
+    zone = models.CharField(
+        max_length=1,
+        null=True,
+        blank=True,
+    )
+
+    day_of_week = models.IntegerField()
+
+    start_hour = models.TimeField()
+
+    end_hour = models.TimeField()
+
+    multiplier = models.DecimalField(
+        max_digits=3,
+        decimal_places=1,
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "pricing_rules"
+
+    def __str__(self):
+        zone = self.zone or "All Zones"
+        return f"{zone} x{self.multiplier}"
