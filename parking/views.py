@@ -3,7 +3,10 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from django.contrib.auth import get_user_model
 from django.utils import timezone
+
+from accounts.permissions import IsGateStaffOrAdmin
 
 from .models import ParkingSlot, ParkingSession
 from .serializers import (
@@ -12,10 +15,12 @@ from .serializers import (
 )
 from .utils import checkout_summary
 
+User = get_user_model()
+
 
 class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    View all parking slots.
+    View parking slots.
     """
 
     serializer_class = ParkingSlotSerializer
@@ -34,26 +39,51 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = ParkingSessionSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        """
+        Only Gate Staff/Admin can perform
+        check-in and check-out.
+        """
+
+        if self.action in ["check_in", "check_out"]:
+            return [IsGateStaffOrAdmin()]
+
+        return [IsAuthenticated()]
 
     def get_queryset(self):
+
         user = self.request.user
 
+        # Admin sees everything
         if user.role == "admin":
             return ParkingSession.objects.all()
 
-        return ParkingSession.objects.filter(
-            user=user
-        )
+        # Gate Staff sees everything
+        if user.role == "gate_staff":
+            return ParkingSession.objects.all()
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        # Drivers only see their own sessions
+        return ParkingSession.objects.filter(user=user)
 
     @action(detail=False, methods=["get"])
     def active(self, request):
         """
-        Return the user's active parking session.
+        Return active parking sessions.
         """
+
+        if request.user.role in ["admin", "gate_staff"]:
+
+            sessions = ParkingSession.objects.filter(
+                status="active"
+            )
+
+            serializer = self.get_serializer(
+                sessions,
+                many=True,
+            )
+
+            return Response(serializer.data)
 
         session = ParkingSession.objects.filter(
             user=request.user,
@@ -74,7 +104,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def history(self, request):
         """
-        Return completed parking sessions.
+        Parking history.
         """
 
         sessions = self.get_queryset().filter(
@@ -91,29 +121,42 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def check_in(self, request):
         """
-        Check a vehicle into the parking lot.
+        Gate Staff checks a driver into parking.
         """
 
-        user = request.user
+        driver_id = request.data.get("driver_id")
+        slot_id = request.data.get("slot_id")
+        license_plate = request.data.get("license_plate")
 
-        if ParkingSession.objects.filter(
-            user=user,
-            status="active",
-        ).exists():
+        if not all([driver_id, slot_id, license_plate]):
             return Response(
                 {
-                    "error": "You already have an active parking session."
+                    "error": "driver_id, slot_id and license_plate are required."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        slot_id = request.data.get("slot_id")
-        license_plate = request.data.get("license_plate")
+        try:
+            driver = User.objects.get(
+                id=driver_id,
+                role="driver",
+            )
 
-        if not slot_id or not license_plate:
+        except User.DoesNotExist:
             return Response(
                 {
-                    "error": "slot_id and license_plate are required."
+                    "error": "Driver not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if ParkingSession.objects.filter(
+            user=driver,
+            status="active",
+        ).exists():
+            return Response(
+                {
+                    "error": "Driver already has an active parking session."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -132,13 +175,13 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         if slot.status != "available":
             return Response(
                 {
-                    "error": "This parking slot is not available."
+                    "error": "Parking slot is not available."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         session = ParkingSession.objects.create(
-            user=user,
+            user=driver,
             slot=slot,
             license_plate=license_plate,
             hourly_rate=slot.base_rate,
@@ -151,7 +194,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
 
         return Response(
             {
-                "message": "Check-in successful.",
+                "message": "Vehicle checked in successfully.",
                 "session": serializer.data,
             },
             status=status.HTTP_201_CREATED,
@@ -160,11 +203,11 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def check_out(self, request, pk=None):
         """
-        Check a vehicle out of the parking lot.
+        Gate Staff checks a vehicle out.
         """
 
         try:
-            session = self.get_queryset().get(pk=pk)
+            session = ParkingSession.objects.get(pk=pk)
 
         except ParkingSession.DoesNotExist:
             return Response(
@@ -189,6 +232,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         session.duration_hours = summary["duration_hours"]
         session.amount_due = summary["amount_due"]
 
+        # Payment will be integrated later.
         session.status = "completed"
         session.save()
 
@@ -200,10 +244,9 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
 
         return Response(
             {
-                "message": "Check-out successful.",
+                "message": "Vehicle checked out successfully.",
                 "duration_hours": session.duration_hours,
                 "amount_due": session.amount_due,
                 "session": serializer.data,
-            },
-            status=status.HTTP_200_OK,
+            }
         )
