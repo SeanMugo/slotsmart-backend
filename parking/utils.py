@@ -12,9 +12,9 @@ def calculate_duration_hours(check_in_time, check_out_time=None):
     Any fraction of an hour is rounded UP.
 
     Examples:
-    15 mins  -> 1 hour
-    61 mins  -> 2 hours
-    2h 15m   -> 3 hours
+        15 mins  -> 1 hour
+        61 mins  -> 2 hours
+        2h 15m   -> 3 hours
     """
 
     if check_out_time is None:
@@ -35,22 +35,23 @@ def calculate_amount(hourly_rate, duration_hours):
     return Decimal(hourly_rate) * Decimal(duration_hours)
 
 
-def checkout_summary(session):
+def calculate_parking_fee(session):
     """
-    Returns all information needed during checkout.
+    Calculates parking duration and total fee.
+    Used during checkout.
     """
 
     duration = calculate_duration_hours(
         session.check_in_time,
-        timezone.now(),
+        session.check_out_time or timezone.now(),
     )
 
-    amount = calculate_amount(
+    total_fee = calculate_amount(
         session.hourly_rate,
         duration,
     )
 
     return {
         "duration_hours": duration,
-        "amount_due": amount,
+        "total_fee": total_fee,
     }

@@ -5,8 +5,13 @@ from .models import (
     ParkingSlot,
     ParkingSession,
     PricingRule,
+    WalletTransaction,
 )
 
+
+# ==========================================
+# PARKING SLOTS
+# ==========================================
 
 @admin.register(ParkingSlot)
 class ParkingSlotAdmin(admin.ModelAdmin):
@@ -31,6 +36,10 @@ class ParkingSlotAdmin(admin.ModelAdmin):
     )
 
 
+# ==========================================
+# PARKING SESSIONS
+# ==========================================
+
 @admin.register(ParkingSession)
 class ParkingSessionAdmin(admin.ModelAdmin):
     list_display = (
@@ -39,13 +48,19 @@ class ParkingSessionAdmin(admin.ModelAdmin):
         "license_plate",
         "slot",
         "status",
-        "amount_due",
+        "total_fee",
+        "wallet_amount",
+        "mpesa_amount",
+        "payment_status",
+        "payment_method",
         "check_in_time",
         "check_out_time",
     )
 
     list_filter = (
         "status",
+        "payment_status",
+        "payment_method",
         "check_in_time",
     )
 
@@ -55,6 +70,38 @@ class ParkingSessionAdmin(admin.ModelAdmin):
         "slot__slot_number",
     )
 
+
+# ==========================================
+# WALLET TRANSACTIONS
+# ==========================================
+
+@admin.register(WalletTransaction)
+class WalletTransactionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "parking_session",
+        "total_amount",
+        "wallet_amount",
+        "mpesa_amount",
+        "status",
+        "created_at",
+    )
+
+    list_filter = (
+        "status",
+        "created_at",
+    )
+
+    search_fields = (
+        "user__username",
+        "description",
+    )
+
+
+# ==========================================
+# PRICING RULES
+# ==========================================
 
 @admin.register(PricingRule)
 class PricingRuleAdmin(admin.ModelAdmin):

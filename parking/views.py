@@ -13,7 +13,8 @@ from .serializers import (
     ParkingSlotSerializer,
     ParkingSessionSerializer,
 )
-from .utils import checkout_summary
+from .utils import calculate_parking_fee
+from .services import process_payment
 
 User = get_user_model()
 
@@ -225,28 +226,56 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Record checkout time
         session.check_out_time = timezone.now()
 
-        summary = checkout_summary(session)
+        # Calculate parking duration and fee
+        summary = calculate_parking_fee(session)
 
         session.duration_hours = summary["duration_hours"]
-        session.amount_due = summary["amount_due"]
+        session.total_fee = summary["total_fee"]
 
-        # Payment will be integrated later.
-        session.status = "completed"
+        # Determine payment flow
+        payment = process_payment(session)
+
         session.save()
 
-        slot = session.slot
-        slot.status = "available"
-        slot.save()
+        # Wallet payment only
+        if not payment["payment_required"]:
 
+            session.status = "completed"
+            session.payment_status = "paid"
+            session.save()
+
+            slot = session.slot
+            slot.status = "available"
+            slot.save()
+
+            serializer = self.get_serializer(session)
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Payment completed successfully using wallet.",
+                    "payment_method": "wallet",
+                    "duration_hours": session.duration_hours,
+                    "total_fee": session.total_fee,
+                    "session": serializer.data,
+                }
+            )
+
+        # Hybrid or M-Pesa payment required
         serializer = self.get_serializer(session)
 
         return Response(
             {
-                "message": "Vehicle checked out successfully.",
+                "success": True,
+                "payment_required": True,
+                "payment_method": payment["payment_method"],
+                "wallet_used": payment["wallet_used"],
+                "mpesa_required": payment["mpesa_required"],
                 "duration_hours": session.duration_hours,
-                "amount_due": session.amount_due,
+                "total_fee": session.total_fee,
                 "session": serializer.data,
             }
         )
