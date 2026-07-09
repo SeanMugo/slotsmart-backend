@@ -25,7 +25,9 @@ class MpesaTransaction(models.Model):
         related_name="mpesa_transactions",
     )
 
-    phone_number = models.CharField(max_length=15)
+    phone_number = models.CharField(
+        max_length=15,
+    )
 
     amount = models.DecimalField(
         max_digits=10,
@@ -45,6 +47,7 @@ class MpesaTransaction(models.Model):
     mpesa_receipt = models.CharField(
         max_length=50,
         blank=True,
+        null=True,
     )
 
     status = models.CharField(
@@ -62,7 +65,14 @@ class MpesaTransaction(models.Model):
         blank=True,
     )
 
+    # Time Safaricom says the payment happened
     transaction_date = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    # Raw callback for debugging (very useful)
+    callback_data = models.JSONField(
         null=True,
         blank=True,
     )
@@ -74,6 +84,10 @@ class MpesaTransaction(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True,
     )
+
+    class Meta:
+        db_table = "mpesa_transactions"
+        ordering = ["-created_at"]
 
     def __str__(self):
         return (

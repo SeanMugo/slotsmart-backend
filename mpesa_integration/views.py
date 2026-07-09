@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import MpesaTransaction
+from parking.models import ParkingSession
 from .serializers import MpesaSTKPushSerializer
 
 
