@@ -125,7 +125,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",           # ← Vite dev server
     "http://127.0.0.1:5173",           # ← Vite dev server
-    "https://slotsmart-frontend.vercel.app", 
+    "https://slotsmart-system.vercel.app", 
 ]
 CORS_ALLOW_CREDENTIALS = True
 
