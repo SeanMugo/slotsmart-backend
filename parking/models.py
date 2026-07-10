@@ -73,6 +73,7 @@ class ParkingSession(models.Model):
     ]
 
     PAYMENT_STATUS = [
+        ("active", "Active"),
         ("pending", "Pending"),
         ("paid", "Paid"),
         ("failed", "Failed"),
@@ -146,7 +147,7 @@ class ParkingSession(models.Model):
     payment_status = models.CharField(
         max_length=20,
         choices=PAYMENT_STATUS,
-        default="pending",
+        default="active",
     )
 
     payment_method = models.CharField(
