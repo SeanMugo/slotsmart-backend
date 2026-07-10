@@ -10,6 +10,7 @@ from .models import (
 class ParkingSlotSerializer(serializers.ModelSerializer):
     is_available = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
+    current_session = serializers.SerializerMethodField()
 
     class Meta:
         model = ParkingSlot
@@ -23,6 +24,24 @@ class ParkingSlotSerializer(serializers.ModelSerializer):
             obj.status,
             obj.status,
         )
+
+    def get_current_session(self, obj):
+        session = (
+            ParkingSession.objects
+            .filter(slot=obj, status="active")
+            .select_related("user")
+            .first()
+        )
+
+        if not session:
+            return None
+
+        return {
+            "driver_id": session.user.id,
+            "driver_name": session.user.username,
+            "license_plate": session.license_plate,
+            "check_in_time": session.check_in_time,
+        }
 
 
 class ParkingSessionSerializer(serializers.ModelSerializer):
@@ -75,3 +94,4 @@ class PricingRuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = PricingRule
         fields = "__all__"
+
