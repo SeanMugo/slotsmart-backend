@@ -201,7 +201,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def check_out(self, request, pk=None):
         """
         Gate Staff checks a vehicle out.

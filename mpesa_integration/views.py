@@ -131,7 +131,7 @@ class MpesaSTKPushView(APIView):
         ).decode()
 
         callback_url = (
-            f"{settings.NGROK_URL}"
+            f"{settings.BASE_URL}"
             "/api/mpesa/callback/"
         )
 

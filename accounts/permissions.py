@@ -38,9 +38,6 @@ class IsDriver(BasePermission):
 
 
 class IsGateStaffOrAdmin(BasePermission):
-    """
-    Allows access to Gate Staff and Admin users.
-    """
 
     def has_permission(self, request, view):
         return (
