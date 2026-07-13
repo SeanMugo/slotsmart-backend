@@ -29,6 +29,13 @@ class User(AbstractUser):
         null=True,
     )
 
+    default_vehicle = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        help_text="Default vehicle registration plate.",
+    )
+
     wallet_balance = models.DecimalField(
         max_digits=10,
         decimal_places=2,

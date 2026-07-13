@@ -10,6 +10,8 @@ from django.contrib.auth import get_user_model
 
 from .serializers import (
     UserSerializer,
+    UpdateProfileSerializer,
+    AdminUpdateUserSerializer,
     LoginSerializer,
     ChangePasswordSerializer,
 )
@@ -102,7 +104,7 @@ class ProfileView(APIView):
 
     def put(self, request):
 
-        serializer = UserSerializer(
+        serializer = UpdateProfileSerializer(
             request.user,
             data=request.data,
             partial=True,
@@ -115,8 +117,8 @@ class ProfileView(APIView):
             return Response(
                 {
                     "success": True,
-                    "message": "Profile updated.",
-                    "user": serializer.data,
+                    "message": "Profile updated successfully.",
+                    "user": UserSerializer(request.user).data,
                 }
             )
 
@@ -226,6 +228,7 @@ class AdminCreateUserView(APIView):
             first_name=data.get("first_name", ""),
             last_name=data.get("last_name", ""),
             phone_number=data.get("phone_number", ""),
+            default_vehicle=data.get("default_vehicle", ""),
             role=role,
         )
 
@@ -291,7 +294,7 @@ class AdminUserDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = UserSerializer(
+        serializer = AdminUpdateUserSerializer(
             user,
             data=request.data,
             partial=True,
@@ -304,7 +307,7 @@ class AdminUserDetailView(APIView):
             return Response(
                 {
                     "message": "User updated successfully.",
-                    "user": serializer.data,
+                    "user": UserSerializer(user).data,
                 }
             )
 

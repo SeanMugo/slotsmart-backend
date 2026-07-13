@@ -13,20 +13,13 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "id",
-            "username",
-            "email",
-            "first_name",
-            "last_name",
-            "role",
-            "phone_number",
-            "wallet_balance",
-            "created_at",
+            "id", "username", "email", "first_name", "last_name",
+            "role", "phone_number", "default_vehicle",
+            "wallet_balance", "created_at"
         ]
 
         read_only_fields = [
             "id",
-            "role",
             "wallet_balance",
             "created_at",
         ]
@@ -35,6 +28,40 @@ class UserSerializer(serializers.ModelSerializer):
         if obj.role == "driver":
             return str(obj.wallet_balance)
         return None
+
+
+class UpdateProfileSerializer(serializers.ModelSerializer):
+    """
+    Logged-in user updates their own profile.
+    """
+
+    class Meta:
+        model = User
+        fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "default_vehicle",
+        ]
+
+
+class AdminUpdateUserSerializer(serializers.ModelSerializer):
+    """
+    Admin updates user information.
+    """
+
+    class Meta:
+        model = User
+        fields = [
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "phone_number",
+            "default_vehicle",
+            "role",
+        ]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -79,7 +106,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         validated_data.pop("password2")
 
-        user = User.objects.create_user(
+        return User.objects.create_user(
             username=validated_data["username"],
             email=validated_data.get("email"),
             password=validated_data["password"],
@@ -89,11 +116,11 @@ class RegisterSerializer(serializers.ModelSerializer):
             role="driver",
         )
 
-        return user
-
 
 class LoginSerializer(serializers.Serializer):
+
     username = serializers.CharField()
+
     password = serializers.CharField(
         write_only=True,
     )
@@ -112,7 +139,7 @@ class LoginSerializer(serializers.Serializer):
 
         if not user.is_active:
             raise serializers.ValidationError(
-                "This account has been disabled."
+                "This account has been deactivated. Please contact an administrator."
             )
 
         attrs["user"] = user
@@ -160,10 +187,7 @@ class UpdateWalletSerializer(serializers.Serializer):
     )
 
     action = serializers.ChoiceField(
-        choices=[
-            "add",
-            "deduct",
-        ]
+        choices=["add", "deduct"]
     )
 
     reason = serializers.CharField(
