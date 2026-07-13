@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -19,20 +19,66 @@ from .services import process_payment
 User = get_user_model()
 
 
-class ParkingSlotViewSet(viewsets.ReadOnlyModelViewSet):
+class ParkingSlotViewSet(viewsets.ModelViewSet):
     """
-    View parking slots.
+    View and edit parking slots.
     """
 
     serializer_class = ParkingSlotSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        """
+        Everyone can view parking slots.
+        Only Admins can edit them.
+        """
+
+        if self.action in [
+            "update",
+            "partial_update",
+            "destroy",
+            "create",
+        ]:
+            if (
+                self.request.user.is_authenticated
+                and self.request.user.role == "admin"
+            ):
+                return [IsAuthenticated()]
+
+            return [IsAuthenticated()]
+
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         return ParkingSlot.objects.all().order_by(
             "floor",
             "slot_number",
         )
+    def perform_update(self, serializer):
+        """
+        Prevent editing occupied parking slots.
+        """
 
+        slot = self.get_object()
+
+        if slot.status == "occupied":
+            raise serializers.ValidationError(
+                "Occupied parking slots cannot be edited."
+            )
+
+        serializer.save()
+
+
+    def perform_destroy(self, instance):
+        """
+        Prevent deleting occupied parking slots.
+        """
+
+        if instance.status == "occupied":
+            raise serializers.ValidationError(
+                "Occupied parking slots cannot be deleted."
+            )
+
+        instance.delete()
 
 class ParkingSessionViewSet(viewsets.ModelViewSet):
     """
