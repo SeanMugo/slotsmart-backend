@@ -1,9 +1,10 @@
 from rest_framework import serializers
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 
 from .models import User
 
+User = get_user_model
 
 class UserSerializer(serializers.ModelSerializer):
     """User details."""
@@ -13,14 +14,23 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "id", "username", "email", "first_name", "last_name",
-            "role", "phone_number", "default_vehicle",
-            "wallet_balance", "created_at"
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "role",
+            "phone_number",
+            "default_vehicle",
+            "wallet_balance",
+            "is_active",          # <-- ADD THIS
+            "created_at",
         ]
 
         read_only_fields = [
             "id",
             "wallet_balance",
+            "is_active",          # <-- ADD THIS
             "created_at",
         ]
 
@@ -118,18 +128,29 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(serializers.Serializer):
-
     username = serializers.CharField()
-
-    password = serializers.CharField(
-        write_only=True,
-    )
+    password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
+        username = attrs["username"]
+        password = attrs["password"]
+
+        try:
+            user = User.objects.get(username=username)
+
+        except User.DoesNotExist:
+            raise serializers.ValidationError(
+                "Invalid username or password."
+            )
+
+        if not user.is_active:
+            raise serializers.ValidationError(
+                "Your account has been deactivated. Please contact an administrator."
+            )
 
         user = authenticate(
-            username=attrs["username"],
-            password=attrs["password"],
+            username=username,
+            password=password,
         )
 
         if not user:
@@ -137,14 +158,8 @@ class LoginSerializer(serializers.Serializer):
                 "Invalid username or password."
             )
 
-        if not user.is_active:
-            raise serializers.ValidationError(
-                "This account has been deactivated. Please contact an administrator."
-            )
-
         attrs["user"] = user
         return attrs
-
 
 class ChangePasswordSerializer(serializers.Serializer):
 
