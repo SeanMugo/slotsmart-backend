@@ -126,7 +126,37 @@ class ProfileView(APIView):
             serializer.errors,
             status=status.HTTP_400_BAD_REQUEST,
         )
+# ==========================================
+# DRIVERS
+# ==========================================
 
+class DriverListView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        drivers = (
+            User.objects.filter(
+                role="driver",
+                is_active=True,
+            )
+            .order_by("first_name", "last_name")
+        )
+
+        data = [
+            {
+                "id": driver.id,
+                "name": (
+                    f"{driver.first_name} {driver.last_name}".strip()
+                    or driver.username
+                ),
+                "default_vehicle": driver.default_vehicle,
+            }
+            for driver in drivers
+        ]
+
+        return Response(data)
 
 # ==========================================
 # CHANGE PASSWORD

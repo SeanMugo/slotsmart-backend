@@ -4,12 +4,14 @@ from .views import (
     LoginView,
     LogoutView,
     ProfileView,
+    DriverListView,
     ChangePasswordView,
     AdminCreateUserView,
     AdminListUsersView,
     AdminUserDetailView,
     AdminActivateUserView,
     AdminDeactivateUserView,
+
 )
 
 urlpatterns = [
@@ -17,6 +19,8 @@ urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("profile/", ProfileView.as_view(), name="profile"),
+    path("drivers/", DriverListView.as_view(), name="drivers"),
+    
     path("change-password/", ChangePasswordView.as_view(), name="change_password"),
 
     # Admin User Management

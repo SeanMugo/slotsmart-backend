@@ -4,7 +4,7 @@ from django.contrib.auth.password_validation import validate_password
 
 from .models import User
 
-User = get_user_model
+User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
     """User details."""
