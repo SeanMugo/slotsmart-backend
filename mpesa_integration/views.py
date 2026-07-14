@@ -1,15 +1,15 @@
 # mpesa_integration/views.py
-
-import base64
 import traceback
 from datetime import datetime
 
 import requests
+
 from django.conf import settings
 
+from rest_framework import status
 from rest_framework.permissions import (
-    IsAuthenticated,
     AllowAny,
+    IsAuthenticated,
 )
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -18,6 +18,7 @@ from parking.models import ParkingSession
 
 from .models import MpesaTransaction
 from .serializers import MpesaSTKPushSerializer
+from .services import send_stk_push
 
 
 class MpesaAuth:
@@ -72,7 +73,7 @@ class MpesaSTKPushView(APIView):
 
             return Response(
                 serializer.errors,
-                status=400,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         phone = serializer.validated_data[
@@ -87,182 +88,55 @@ class MpesaSTKPushView(APIView):
             "parking_session_id"
         ]
 
-        user = request.user
-
         try:
 
             parking_session = ParkingSession.objects.get(
                 id=parking_session_id,
-                user=user,
             )
 
         except ParkingSession.DoesNotExist:
 
             return Response(
                 {
-                    "error":
-                    "Parking session not found."
+                    "error": "Parking session not found."
                 },
-                status=404,
+                status=status.HTTP_404_NOT_FOUND,
             )
 
-        access_token = MpesaAuth.get_access_token()
+        user = parking_session.user
 
-        if not access_token:
-
-            return Response(
-                {
-                    "error":
-                    "Unable to authenticate with Safaricom."
-                },
-                status=500,
-            )
-
-        timestamp = datetime.now().strftime(
-            "%Y%m%d%H%M%S"
-        )
-
-        password = base64.b64encode(
-            (
-                settings.MPESA_SHORTCODE
-                + settings.MPESA_PASSKEY
-                + timestamp
-            ).encode()
-        ).decode()
-
-        callback_url = (
-            f"{settings.BASE_URL}"
-            "/api/mpesa/callback/"
-        )
-
-        payload = {
-            "BusinessShortCode":
-                int(settings.MPESA_SHORTCODE),
-
-            "Password":
-                password,
-
-            "Timestamp":
-                timestamp,
-
-            "TransactionType":
-                "CustomerPayBillOnline",
-
-            "Amount":
-                int(amount),
-
-            "PartyA":
-                phone,
-
-            "PartyB":
-                int(settings.MPESA_SHORTCODE),
-
-            "PhoneNumber":
-                phone,
-
-            "CallBackURL":
-                callback_url,
-
-            "AccountReference":
-                f"PS{parking_session.id}",
-
-            "TransactionDesc":
-                "Parking Payment",
-        }
-
-        headers = {
-            "Authorization":
-                f"Bearer {access_token}",
-
-            "Content-Type":
-                "application/json",
-        }
-
-        try:
-
-            response = requests.post(
-                "https://sandbox.safaricom.co.ke/"
-                "mpesa/stkpush/v1/processrequest",
-                json=payload,
-                headers=headers,
-                timeout=30,
-            )
-
-        except Exception:
-
-            traceback.print_exc()
-
-            return Response(
-                {
-                    "error":
-                    "Failed to contact M-Pesa."
-                },
-                status=500,
-            )
-
-        if response.status_code != 200:
-
-            return Response(
-                {
-                    "error":
-                    "M-Pesa request failed.",
-
-                    "details":
-                    response.text,
-                },
-                status=500,
-            )
-
-        data = response.json()
-
-        if data.get("ResponseCode") != "0":
-
-            return Response(
-                {
-                    "error":
-                    data.get(
-                        "ResponseDescription"
-                    )
-                },
-                status=400,
-            )
-
-        transaction = MpesaTransaction.objects.create(
+        result = send_stk_push(
             user=user,
             parking_session=parking_session,
             phone_number=phone,
             amount=amount,
-            merchant_request_id=data.get(
-                "MerchantRequestID"
-            ),
-            checkout_request_id=data.get(
-                "CheckoutRequestID"
-            ),
-            status="pending",
-            response_code=data.get(
-                "ResponseCode"
-            ),
-            response_description=data.get(
-                "ResponseDescription"
-            ),
         )
+
+        if not result["success"]:
+
+            return Response(
+                {
+                    "error": result["error"],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response(
             {
                 "success": True,
-                "message":
-                (
-                    "STK Push sent. "
+                "message": (
+                    "STK Push sent successfully. "
                     "Complete payment on your phone."
                 ),
-                "transaction_id":
-                    transaction.id,
-                "checkout_request_id":
-                    transaction.checkout_request_id,
+                "transaction_id": result[
+                    "transaction"
+                ].id,
+                "checkout_request_id": result[
+                    "transaction"
+                ].checkout_request_id,
             }
         )
-
-
+    
 class MpesaCallbackView(APIView):
 
     permission_classes = [AllowAny]

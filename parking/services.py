@@ -3,7 +3,7 @@ from decimal import Decimal
 from .models import WalletTransaction
 
 
-def process_payment(session):
+def process_payment(session, phone_number):
     """
     Determines how a parking session will be paid.
 

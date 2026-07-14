@@ -15,6 +15,7 @@ from .serializers import (
 )
 from .utils import calculate_parking_fee
 from .services import process_payment
+from mpesa_integration.services import send_stk_push
 
 User = get_user_model()
 
@@ -281,10 +282,44 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         session.duration_hours = summary["duration_hours"]
         session.total_fee = summary["total_fee"]
 
+        phone_number = request.data.get("phone_number")
+
+        if not phone_number:
+            return Response(
+                {
+                    "error": "Phone number is required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Determine payment flow
-        payment = process_payment(session)
+        payment = process_payment(
+            session=session,
+            phone_number=phone_number,
+        )
 
         session.save()
+
+        # Send STK Push for M-Pesa / Hybrid payments
+        if payment["payment_required"]:
+
+            result = send_stk_push(
+                user=session.user,
+                parking_session=session,
+                phone_number=phone_number,
+                amount=payment["mpesa_required"],
+            )
+
+            if not result["success"]:
+
+                return Response(
+                    {
+                        "error": result["error"],
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+       
 
         # Wallet payment only
         if not payment["payment_required"]:
@@ -303,25 +338,29 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
                 {
                     "success": True,
                     "message": "Payment completed successfully using wallet.",
-                    "payment_method": "wallet",
+                    "payment_required": False,
+                    "payment_method": payment["payment_method"],
+                    "wallet_used": payment["wallet_used"],
+                    "mpesa_required": payment["mpesa_required"],
                     "duration_hours": session.duration_hours,
                     "total_fee": session.total_fee,
                     "session": serializer.data,
                 }
             )
-
         # Hybrid or M-Pesa payment required
         serializer = self.get_serializer(session)
 
         return Response(
-            {
-                "success": True,
-                "payment_required": True,
-                "payment_method": payment["payment_method"],
-                "wallet_used": payment["wallet_used"],
-                "mpesa_required": payment["mpesa_required"],
-                "duration_hours": session.duration_hours,
-                "total_fee": session.total_fee,
-                "session": serializer.data,
-            }
-        )
+                {
+                    "success": True,
+                    "message": "STK Push sent successfully.",
+                    "payment_required": True,
+                    "payment_method": payment["payment_method"],
+                    "wallet_used": payment["wallet_used"],
+                    "mpesa_required": payment["mpesa_required"],
+                    "duration_hours": session.duration_hours,
+                    "total_fee": session.total_fee,
+                    "session": serializer.data,
+                    "transaction_id": result["transaction"].id,
+                }
+            )
